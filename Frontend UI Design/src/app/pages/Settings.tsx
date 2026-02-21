@@ -1,71 +1,59 @@
-import { Bell, Lock, Shield, User, Globe, Moon, Sun } from "lucide-react";
+import { Bell, Moon, Database, RefreshCw } from "lucide-react";
 
 export function Settings() {
   return (
-    <div className="p-8 max-w-4xl mx-auto space-y-8 text-collapse-text">
+    <div className="p-8 max-w-3xl mx-auto space-y-8 text-collapse-text">
       <div>
         <h1 className="text-3xl font-bold font-sans tracking-tight">Settings</h1>
-        <p className="text-collapse-muted mt-2">Manage your account preferences and system configurations.</p>
+        <p className="text-collapse-muted mt-2">Analyst preferences and system configuration.</p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-        {/* Sidebar for settings */}
-        <div className="space-y-1">
-          <SettingsTab active label="General" icon={<User className="w-4 h-4" />} />
-          <SettingsTab label="Notifications" icon={<Bell className="w-4 h-4" />} />
-          <SettingsTab label="Security" icon={<Shield className="w-4 h-4" />} />
-          <SettingsTab label="Network" icon={<Globe className="w-4 h-4" />} />
-          <SettingsTab label="Privacy" icon={<Lock className="w-4 h-4" />} />
+      <div className="space-y-5">
+        {/* Appearance */}
+        <div className="bg-collapse-surface border border-collapse-border rounded-xl p-6 shadow-sm">
+          <h2 className="text-base font-semibold mb-4 border-b border-collapse-border pb-3 flex items-center gap-2">
+            <Moon className="w-4 h-4 text-collapse-muted" /> Appearance
+          </h2>
+          <div className="flex items-center justify-between p-4 bg-collapse-bg rounded-lg border border-collapse-border">
+            <div>
+              <p className="font-medium text-sm">Dark Mode</p>
+              <p className="text-xs text-collapse-muted mt-0.5">CollapseOS uses dark theme by default</p>
+            </div>
+            <div className="relative inline-flex h-6 w-11 items-center rounded-full bg-collapse-accent">
+              <span className="translate-x-6 inline-block h-4 w-4 transform rounded-full bg-white" />
+            </div>
+          </div>
         </div>
 
-        {/* Content */}
-        <div className="md:col-span-2 space-y-6">
-          <div className="bg-collapse-surface border border-collapse-border rounded-xl p-6 shadow-sm">
-            <h2 className="text-lg font-semibold mb-4 border-b border-collapse-border pb-2">Profile Information</h2>
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-collapse-muted">First Name</label>
-                  <input type="text" defaultValue="Admin" className="w-full bg-collapse-bg border border-collapse-border rounded-lg px-4 py-2 text-collapse-text focus:border-collapse-accent focus:ring-1 focus:ring-collapse-accent outline-none transition-all" />
-                </div>
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-collapse-muted">Last Name</label>
-                  <input type="text" defaultValue="User" className="w-full bg-collapse-bg border border-collapse-border rounded-lg px-4 py-2 text-collapse-text focus:border-collapse-accent focus:ring-1 focus:ring-collapse-accent outline-none transition-all" />
-                </div>
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-collapse-muted">Email Address</label>
-                <input type="email" defaultValue="admin@system.local" className="w-full bg-collapse-bg border border-collapse-border rounded-lg px-4 py-2 text-collapse-text focus:border-collapse-accent focus:ring-1 focus:ring-collapse-accent outline-none transition-all" />
-              </div>
-            </div>
+        {/* Notifications */}
+        <div className="bg-collapse-surface border border-collapse-border rounded-xl p-6 shadow-sm">
+          <h2 className="text-base font-semibold mb-4 border-b border-collapse-border pb-3 flex items-center gap-2">
+            <Bell className="w-4 h-4 text-collapse-muted" /> Alert Thresholds
+          </h2>
+          <div className="space-y-4">
+            <SettingRow label="High-risk threshold" description="Alert when collapse probability exceeds this value" defaultValue="65" unit="%" />
+            <SettingRow label="CUSUM sensitivity" description="Minutes of sustained elevated risk before flagging" defaultValue="3" unit="min" />
           </div>
+        </div>
 
-          <div className="bg-collapse-surface border border-collapse-border rounded-xl p-6 shadow-sm">
-            <h2 className="text-lg font-semibold mb-4 border-b border-collapse-border pb-2">Appearance</h2>
-            <div className="flex items-center justify-between p-4 bg-collapse-bg rounded-lg border border-collapse-border mb-4">
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-collapse-surface rounded-md border border-collapse-border text-collapse-text">
-                  <Moon className="w-5 h-5" />
-                </div>
-                <div>
-                  <p className="font-medium text-sm">Dark Mode</p>
-                  <p className="text-xs text-collapse-muted">System is currently using dark theme</p>
-                </div>
+        {/* API */}
+        <div className="bg-collapse-surface border border-collapse-border rounded-xl p-6 shadow-sm">
+          <h2 className="text-base font-semibold mb-4 border-b border-collapse-border pb-3 flex items-center gap-2">
+            <Database className="w-4 h-4 text-collapse-muted" /> Backend
+          </h2>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between p-3 bg-collapse-bg rounded-lg border border-collapse-border">
+              <div>
+                <p className="text-sm font-medium">API endpoint</p>
+                <p className="text-xs text-collapse-muted font-mono mt-0.5">
+                  {import.meta.env.VITE_API_URL || 'http://localhost:8000'}
+                </p>
               </div>
-              <div className="relative inline-flex h-6 w-11 items-center rounded-full bg-collapse-accent transition-colors">
-                <span className="translate-x-6 inline-block h-4 w-4 transform rounded-full bg-white transition" />
-              </div>
+              <span className="text-xs bg-collapse-safe/10 text-collapse-safe border border-collapse-safe/20 px-2 py-0.5 rounded font-mono">connected</span>
             </div>
-          </div>
-          
-          <div className="bg-collapse-surface border border-collapse-border rounded-xl p-6 shadow-sm">
-             <h2 className="text-lg font-semibold mb-4 border-b border-collapse-border pb-2 text-collapse-risk">Danger Zone</h2>
-             <p className="text-sm text-collapse-muted mb-4">
-               Irreversible actions regarding your account and data.
-             </p>
-             <button className="px-4 py-2 bg-collapse-risk/10 text-collapse-risk border border-collapse-risk/20 rounded-lg text-sm font-medium hover:bg-collapse-risk/20 transition-colors">
-               Delete Account
-             </button>
+            <p className="text-xs text-collapse-muted">
+              Set <code className="bg-collapse-bg px-1 rounded">VITE_API_URL</code> in <code className="bg-collapse-bg px-1 rounded">Frontend UI Design/.env</code> to change the backend URL.
+            </p>
           </div>
         </div>
       </div>
@@ -73,11 +61,21 @@ export function Settings() {
   );
 }
 
-function SettingsTab({ label, icon, active = false }: { label: string, icon: React.ReactNode, active?: boolean }) {
+function SettingRow({ label, description, defaultValue, unit }: { label: string; description: string; defaultValue: string; unit?: string }) {
   return (
-    <button className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${active ? 'bg-collapse-surface text-collapse-accent border-l-2 border-collapse-accent shadow-sm' : 'text-collapse-muted hover:text-collapse-text hover:bg-collapse-surface/50'}`}>
-      {icon}
-      {label}
-    </button>
+    <div className="flex items-center justify-between gap-4 p-3 bg-collapse-bg rounded-lg border border-collapse-border">
+      <div>
+        <p className="text-sm font-medium">{label}</p>
+        <p className="text-xs text-collapse-muted mt-0.5">{description}</p>
+      </div>
+      <div className="flex items-center gap-1.5 shrink-0">
+        <input
+          type="number"
+          defaultValue={defaultValue}
+          className="w-16 bg-collapse-surface border border-collapse-border rounded px-2 py-1 text-sm text-right text-collapse-text font-mono focus:border-collapse-accent focus:outline-none"
+        />
+        {unit && <span className="text-xs text-collapse-muted font-mono">{unit}</span>}
+      </div>
+    </div>
   );
 }

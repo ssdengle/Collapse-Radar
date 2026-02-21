@@ -64,14 +64,26 @@ def synthetic_timeline(match_id: int, team: str, num_minutes: int = 96):
     return out
 
 
-def synthetic_goals(match_id: int):
-    """Few synthetic goals so charts have markers."""
+def synthetic_goals(match_id: int, home_team: str = "Home", away_team: str = "Away",
+                    home_score: int = 1, away_score: int = 1):
+    """Generate exactly home_score + away_score goals at deterministic minutes."""
     s = _seed(match_id, "goals")
-    return [
-        {"minute": 23 + (s % 10), "scoring_team": "Away", "conceding_team": "Home"},
-        {"minute": 45 + (s % 15), "scoring_team": "Home", "conceding_team": "Away"},
-        {"minute": 67 + (s % 12), "scoring_team": "Away", "conceding_team": "Home"},
+    minute_pool = [
+        10 + s % 8, 22 + s % 10, 34 + s % 7, 44 + (s // 3) % 8,
+        54 + s % 9, 63 + (s // 5) % 10, 73 + s % 8, 83 + (s // 7) % 7,
     ]
+    home_goals, away_goals = [], []
+    home_left, away_left = home_score, away_score
+    for i, minute in enumerate(minute_pool):
+        if home_left > 0 and (i % 2 == 0 or away_left == 0):
+            home_goals.append({"minute": minute, "scoring_team": home_team, "conceding_team": away_team})
+            home_left -= 1
+        elif away_left > 0:
+            away_goals.append({"minute": minute, "scoring_team": away_team, "conceding_team": home_team})
+            away_left -= 1
+        if home_left == 0 and away_left == 0:
+            break
+    return sorted(home_goals + away_goals, key=lambda g: g["minute"])
 
 
 FEATURE_KEYS = [
@@ -95,6 +107,8 @@ def synthetic_window(match_id: int, minute: int, team: str):
     if d3 == d1 or d3 == d2:
         d3 = DRIVERS[(s % 6 + 2) % 8]
     features = {k: round(0.1 + ((s + sum(ord(c) for c in k)) % 100) / 200, 4) for k in FEATURE_KEYS}
+    # territory_tilt should vary between -1 and 1 per minute (negative = pressing high, positive = under pressure)
+    features["territory_tilt"] = round(((s * 3 + minute * 17) % 200 - 100) / 110, 4)
     return {
         "minute": minute,
         "probability": round(prob, 4),

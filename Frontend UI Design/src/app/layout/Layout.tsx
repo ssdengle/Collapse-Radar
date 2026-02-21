@@ -1,4 +1,4 @@
-import { Outlet, useLocation } from "react-router";
+import { Outlet, useLocation, Link } from "react-router";
 import { NavLink } from "../components/router-components";
 import { 
   LayoutDashboard, 
@@ -7,7 +7,6 @@ import {
   Settings, 
   Menu,
   ChevronRight,
-  User,
   Swords,
   BrainCircuit,
   Stethoscope,
@@ -58,25 +57,6 @@ export function Layout() {
           <NavItem to="/settings" icon={<Settings size={20} />} label="Settings" isOpen={isSidebarOpen} />
         </nav>
 
-        {/* User Profile */}
-        <div className="p-4 border-t border-collapse-border shrink-0">
-          <div className={clsx(
-            "flex items-center gap-3 p-2 rounded-lg hover:bg-collapse-border/50 transition-colors cursor-pointer",
-            !isSidebarOpen && "justify-center"
-          )}>
-            <div className="w-10 h-10 rounded-full bg-collapse-muted flex items-center justify-center shrink-0 border-2 border-collapse-bg">
-              <User className="w-5 h-5 text-collapse-text" />
-            </div>
-            {isSidebarOpen && (
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium truncate">Admin User</p>
-                <p className="text-xs text-collapse-muted truncate">admin@system.local</p>
-              </div>
-            )}
-            {isSidebarOpen && <ChevronRight className="w-4 h-4 text-collapse-muted" />}
-          </div>
-        </div>
-
         {/* Toggle Button */}
         <button 
           onClick={() => setIsSidebarOpen(!isSidebarOpen)}
@@ -93,10 +73,14 @@ export function Layout() {
           <div className="flex items-center gap-4 text-collapse-muted">
              <Menu className="lg:hidden w-6 h-6 cursor-pointer" onClick={() => setIsSidebarOpen(!isSidebarOpen)} />
              <div className="hidden md:flex items-center gap-2 text-sm">
-                <span className="text-collapse-muted hover:text-collapse-text cursor-pointer transition-colors">Home</span>
+                <Link to="/" className="text-collapse-muted hover:text-collapse-accent transition-colors">Home</Link>
                 <ChevronRight className="w-4 h-4" />
-                <span className="text-collapse-text font-medium capitalize">
-                  {location.pathname === '/' ? 'Dashboard' : location.pathname.slice(1).replace('-', ' ')}
+                <span className="text-collapse-text font-medium">
+                  {location.pathname === '/'
+                    ? 'Dashboard'
+                    : location.pathname === '/wc-2026'
+                    ? 'WC 2026'
+                    : location.pathname.slice(1).replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
                 </span>
              </div>
           </div>

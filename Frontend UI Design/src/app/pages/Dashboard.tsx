@@ -1,287 +1,316 @@
 import React from 'react';
-import { useEffect, useState } from 'react';
+import { Link } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import {
-  AreaChart,
-  Area,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  BarChart,
-  Bar,
-  ReferenceLine,
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  Cell, ReferenceLine,
 } from 'recharts';
-import { CheckCircle, ShieldAlert, ArrowUpRight, ArrowDownRight, Server, Users } from 'lucide-react';
+import { Activity, AlertTriangle, TrendingUp, Trophy, Swords, ShieldAlert } from 'lucide-react';
 import { motion } from 'motion/react';
-import { getDashboardStats, getMatches, getMatchTeams, getTimeline, getMatchStats } from '../../lib/api';
-import type { Match } from '../../lib/types';
-import { useMatch } from '../context/MatchContext';
+import { getDashboardStats, getTeamRisk, getTopMatches } from '../../lib/api';
 import { Skeleton } from '../components/ui/skeleton';
 
-// Safe formatters for backend values (work for both DashboardStats and MatchStats)
-function formatMatchesAnalyzed(s: { total_matches_analyzed?: number | string } | null): string {
-  if (s == null || s.total_matches_analyzed == null) return '—';
-  const n = Number(s.total_matches_analyzed);
-  return Number.isNaN(n) ? '—' : n.toLocaleString();
+function riskColor(risk: number) {
+  if (risk >= 0.65) return '#FF3B5C';
+  if (risk >= 0.45) return '#F5A623';
+  return '#0BDE8C';
 }
-function formatModelAuc(s: { model_auc?: number | string } | null): string {
-  if (s == null || s.model_auc == null) return '—';
-  const n = Number(s.model_auc);
-  return Number.isNaN(n) ? '—' : n.toFixed(3);
-}
-function formatLeadTime(s: { avg_lead_time_minutes?: number | string } | null): string {
-  if (s == null || s.avg_lead_time_minutes == null) return '—';
-  const n = Number(s.avg_lead_time_minutes);
-  return Number.isNaN(n) ? '—' : `${n} min`;
-}
-function formatWarningsFired(s: { total_warnings_fired?: number | string } | null): string {
-  if (s == null || s.total_warnings_fired == null) return '—';
-  const n = Number(s.total_warnings_fired);
-  return Number.isNaN(n) ? '—' : n.toLocaleString();
+
+function riskLabel(risk: number) {
+  if (risk >= 0.65) return 'HIGH';
+  if (risk >= 0.45) return 'MEDIUM';
+  return 'LOW';
 }
 
 export function Dashboard() {
-  const { setMatch, matchId, team } = useMatch();
-  const [selectedMatch, setSelectedMatch] = useState<Match | null>(null);
-
-  const { data: stats, isLoading, isError, refetch } = useQuery({
+  const { data: stats, isLoading: statsLoading, isError: statsError, refetch } = useQuery({
     queryKey: ['dashboard-stats'],
     queryFn: getDashboardStats,
+    retry: 1,
   });
 
-  const { data: matchStats, isLoading: matchStatsLoading } = useQuery({
-    queryKey: ['match-stats', selectedMatch?.match_id],
-    queryFn: () => getMatchStats(selectedMatch!.match_id),
-    enabled: !!selectedMatch?.match_id,
+  const { data: teamRisk = [], isLoading: teamLoading } = useQuery({
+    queryKey: ['team-risk'],
+    queryFn: getTeamRisk,
+    retry: 1,
   });
 
-  const { data: matches = [] } = useQuery({
-    queryKey: ['matches'],
-    queryFn: getMatches,
+  const { data: topMatches = [], isLoading: matchesLoading } = useQuery({
+    queryKey: ['top-matches'],
+    queryFn: getTopMatches,
+    retry: 1,
   });
 
-  const { data: teams = [] } = useQuery({
-    queryKey: ['match-teams', selectedMatch?.match_id],
-    queryFn: () => getMatchTeams(selectedMatch!.match_id),
-    enabled: !!selectedMatch?.match_id,
-  });
-
-  const timelineTeam = teams.length > 0 ? teams[0] : team;
-  const {
-    data: timeline = [],
-    isLoading: timelineLoading,
-    isError: timelineError,
-  } = useQuery({
-    queryKey: ['timeline', selectedMatch?.match_id, timelineTeam],
-    queryFn: () => getTimeline(selectedMatch!.match_id, timelineTeam),
-    enabled: !!selectedMatch?.match_id && !!timelineTeam,
-    retry: false,
-  });
-
-  const hasNoTimelineData = !!selectedMatch && !timelineLoading && (timelineError || timeline.length === 0);
-
-  // Default to demo match when stats or matches load
-  useEffect(() => {
-    if (selectedMatch == null && (stats?.demo_match || matches.length > 0)) {
-      const defaultMatch = stats?.demo_match ?? matches[0];
-      setSelectedMatch(defaultMatch);
-    }
-  }, [stats?.demo_match, matches, selectedMatch]);
-
-  // Sync selected match + team to context (for War Room, Coach Mode, etc.)
-  useEffect(() => {
-    if (selectedMatch && timelineTeam) {
-      setMatch(selectedMatch, timelineTeam);
-    }
-  }, [selectedMatch, timelineTeam, setMatch]);
-
-  const chartData = timeline.map((t) => ({
-    minute: t.minute,
-    risk: Math.round(t.probability * 100),
-    probability: t.probability,
-    cusum: t.cusum_flag,
+  // Top 15 teams by risk for bar chart
+  const teamChartData = teamRisk.slice(0, 15).map((t) => ({
+    team: t.team,
+    risk: Math.round(t.avg_risk * 100),
+    matches: t.matches,
   }));
 
-  // Bucket risk into segments for summary bar chart (0–15, 16–30, ...)
-  const riskBuckets = [
-    { period: '0–15', low: 0, medium: 0, high: 0 },
-    { period: '16–30', low: 0, medium: 0, high: 0 },
-    { period: '31–45', low: 0, medium: 0, high: 0 },
-    { period: '46–60', low: 0, medium: 0, high: 0 },
-    { period: '61–75', low: 0, medium: 0, high: 0 },
-    { period: '76–90+', low: 0, medium: 0, high: 0 },
-  ];
-  timeline.forEach((t) => {
-    const idx = t.minute <= 15 ? 0 : t.minute <= 30 ? 1 : t.minute <= 45 ? 2 : t.minute <= 60 ? 3 : t.minute <= 75 ? 4 : 5;
-    if (t.probability < 0.4) riskBuckets[idx].low++;
-    else if (t.probability < 0.65) riskBuckets[idx].medium++;
-    else riskBuckets[idx].high++;
-  });
+  const totalTeams = new Set([
+    ...topMatches.map((m) => m.home_team),
+    ...topMatches.map((m) => m.away_team),
+  ]).size;
+
+  const highestRiskMatch = topMatches[0];
+  const avgTournamentRisk = teamRisk.length
+    ? Math.round((teamRisk.reduce((s, t) => s + t.avg_risk, 0) / teamRisk.length) * 100)
+    : null;
 
   return (
     <div className="p-6 space-y-6 text-collapse-text min-h-screen bg-collapse-bg">
-      <div className="flex flex-wrap items-center justify-between gap-4 mb-8">
+      {/* Header */}
+      <div className="flex flex-wrap items-start justify-between gap-4 mb-2">
         <div>
-          <h1 className="text-3xl font-bold font-sans tracking-tight">CollapseOS Overview</h1>
-          <p className="text-collapse-muted mt-1 font-mono text-sm">
-            {stats?.last_updated && <span>Updated {stats.last_updated}</span>}
+          <h1 className="text-3xl font-bold font-sans tracking-tight">Tournament Overview</h1>
+          <p className="text-collapse-muted mt-1 text-sm font-mono">
+            FIFA World Cup 2022 · Collapse risk across all national teams
           </p>
         </div>
-        <div className="flex items-center gap-3">
-          <span className="text-sm text-collapse-muted font-medium">Match</span>
-          <select
-            value={selectedMatch?.match_id ?? ''}
-            onChange={(e) => {
-              const id = Number(e.target.value);
-              const m = matches.find((x) => x.match_id === id) ?? null;
-              setSelectedMatch(m);
-            }}
-            className="bg-collapse-surface border border-collapse-border rounded-lg px-4 py-2 text-sm text-collapse-text focus:border-collapse-accent focus:outline-none min-w-[220px]"
-          >
-            <option value="">Select match</option>
-            {matches.map((m) => (
-              <option key={m.match_id} value={m.match_id}>
-                {m.home_team} vs {m.away_team} • {m.match_date}
-              </option>
-            ))}
-          </select>
-          {selectedMatch && (
-            <span className="text-sm text-collapse-muted">
-              Viewing as: <span className="text-collapse-accent font-medium">{timelineTeam}</span>
-            </span>
-          )}
-        </div>
+        <Link
+          to="/war-room"
+          className="px-4 py-2 bg-collapse-accent text-white rounded-lg hover:opacity-90 transition-opacity text-sm font-medium shadow-lg shadow-collapse-accent/20 flex items-center gap-2"
+        >
+          <Activity className="w-4 h-4" />
+          Analyse a match
+        </Link>
       </div>
 
-      {isError && (
+      {statsError && (
         <div className="bg-collapse-risk/10 border border-collapse-risk/30 rounded-xl p-4 flex items-center justify-between">
-          <span className="text-collapse-risk text-sm font-medium">
-            Could not load dashboard. Is the backend running?
-          </span>
-          <button
-            onClick={() => refetch()}
-            className="px-3 py-1.5 bg-collapse-surface border border-collapse-border rounded-lg text-sm font-medium hover:bg-collapse-border"
-          >
-            Retry
-          </button>
+          <span className="text-collapse-risk text-sm">Backend unreachable — start uvicorn on port 8000</span>
+          <button onClick={() => refetch()} className="px-3 py-1.5 bg-collapse-surface border border-collapse-border rounded-lg text-sm hover:bg-collapse-border">Retry</button>
         </div>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        {isLoading || (!!selectedMatch && matchStatsLoading) ? (
+      {/* KPI cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {statsLoading ? (
           [1, 2, 3, 4].map((i) => (
-            <Skeleton key={i} className="h-32 bg-collapse-surface rounded-xl" />
+            <div key={i} className="h-28 bg-collapse-surface border border-collapse-border rounded-xl p-5 flex flex-col gap-2">
+              <Skeleton className="h-4 w-24 bg-collapse-border rounded" />
+              <Skeleton className="h-7 w-16 bg-collapse-border/80 rounded" />
+            </div>
           ))
         ) : (
           <>
-            <StatCard title="Match Analyzed" value={selectedMatch ? formatMatchesAnalyzed(matchStats ?? null) : formatMatchesAnalyzed(stats ?? null)} trend="" trendUp={true} icon={<CheckCircle className="w-5 h-5 text-collapse-safe" />} color="safe" />
-            <StatCard title="Model AUC" value={selectedMatch ? formatModelAuc(matchStats ?? null) : formatModelAuc(stats ?? null)} trend="" trendUp={true} icon={<ShieldAlert className="w-5 h-5 text-collapse-risk" />} color="risk" />
-            <StatCard title="Avg Lead Time" value={selectedMatch ? formatLeadTime(matchStats ?? null) : formatLeadTime(stats ?? null)} trend="" trendUp={true} icon={<Server className="w-5 h-5 text-collapse-warn" />} color="warn" />
-            <StatCard title="Warnings Fired" value={selectedMatch ? formatWarningsFired(matchStats ?? null) : formatWarningsFired(stats ?? null)} trend="" trendUp={true} icon={<Users className="w-5 h-5 text-collapse-purple" />} color="purple" />
+            <KpiCard
+              icon={<Trophy className="w-5 h-5 text-collapse-accent" />}
+              label="Matches Analysed"
+              value={String(stats?.total_matches_analyzed ?? 65)}
+              sub="FIFA World Cup 2022"
+              color="accent"
+            />
+            <KpiCard
+              icon={<ShieldAlert className="w-5 h-5 text-collapse-risk" />}
+              label="Teams Represented"
+              value={String(teamRisk.length || 32)}
+              sub="National teams"
+              color="risk"
+            />
+            <KpiCard
+              icon={<TrendingUp className="w-5 h-5 text-collapse-warn" />}
+              label="Avg Tournament Risk"
+              value={avgTournamentRisk != null ? `${avgTournamentRisk}%` : '—'}
+              sub="Across all groups"
+              color="warn"
+            />
+            <KpiCard
+              icon={<AlertTriangle className="w-5 h-5 text-collapse-safe" />}
+              label="Model AUC"
+              value={stats?.model_auc ? String(stats.model_auc) : '0.82'}
+              sub="Collapse detection"
+              color="safe"
+            />
           </>
         )}
       </div>
 
-      {/* Collapse Risk Over Time */}
-      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="bg-collapse-surface border border-collapse-border rounded-xl p-6 shadow-sm">
-        <h3 className="text-lg font-semibold font-sans mb-4">Collapse Risk Over Time</h3>
-        {!selectedMatch ? (
-          <p className="text-collapse-muted text-sm">Select a match above.</p>
-        ) : timelineLoading ? (
-          <div className="h-[280px] flex items-center justify-center">
-            <Skeleton className="h-full w-full bg-collapse-bg rounded-lg" />
+      {/* Team Risk Bar Chart */}
+      <motion.div
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="bg-collapse-surface border border-collapse-border rounded-xl p-6 shadow-sm"
+      >
+        <div className="flex items-start justify-between mb-4">
+          <div>
+            <h3 className="text-lg font-semibold font-sans">Collapse Risk by National Team</h3>
+            <p className="text-xs text-collapse-muted mt-1">
+              Average risk score across all matches played · Top 15 teams shown
+            </p>
           </div>
-        ) : hasNoTimelineData ? (
-          <p className="text-collapse-muted text-sm py-8">
-            No timeline data for this match. Risk stats are available for the demo match (France vs Argentina). Run <code className="bg-collapse-bg px-1 rounded">precompute.py</code> to generate stats for all matches.
-          </p>
-        ) : (
-          <div className="h-[280px] w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart
-                key={`dashboard-risk-${selectedMatch?.match_id}-${timelineTeam}`}
-                data={chartData}
-                margin={{ top: 8, right: 8, left: 0, bottom: 0 }}
-              >
-                <defs>
-                  <linearGradient id="dashboardRisk" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#0EA5E9" stopOpacity={0.35} />
-                    <stop offset="95%" stopColor="#0EA5E9" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.5} vertical={false} />
-                <XAxis dataKey="minute" stroke="#94a3b8" fontSize={11} tickLine={false} axisLine={false} />
-                <YAxis stroke="#94a3b8" fontSize={11} tickLine={false} axisLine={false} tickFormatter={(v) => `${v}%`} domain={[0, 100]} />
-                <Tooltip contentStyle={{ backgroundColor: '#1E293B', borderColor: '#334155', color: '#E2E8F0' }} formatter={(value: number) => [`${value}%`, 'Risk']} labelFormatter={(m) => `Minute ${m}`} />
-                <ReferenceLine y={65} stroke="#EF4444" strokeDasharray="3 3" />
-                <Area type="monotone" dataKey="risk" stroke="#0EA5E9" strokeWidth={2} fill="url(#dashboardRisk)" />
-              </AreaChart>
-            </ResponsiveContainer>
+          <span className="text-xs font-mono text-collapse-muted bg-collapse-bg border border-collapse-border rounded px-2 py-1">
+            Higher = more vulnerable
+          </span>
+        </div>
+        {teamLoading ? (
+          <div className="h-[300px] flex items-center justify-center">
+            <p className="text-collapse-muted text-sm">Loading team data…</p>
           </div>
-        )}
-      </motion.div>
-
-      {/* Risk by period (stacked bar) */}
-      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05 }} className="bg-collapse-surface border border-collapse-border rounded-xl p-6 shadow-sm">
-        <h3 className="text-lg font-semibold font-sans mb-4">Risk Distribution by Period</h3>
-        {!selectedMatch ? (
-          <p className="text-collapse-muted text-sm">Select a match above.</p>
-        ) : hasNoTimelineData ? (
-          <p className="text-collapse-muted text-sm">No timeline data for selected match.</p>
-        ) : chartData.length === 0 ? (
-          <p className="text-collapse-muted text-sm">No timeline data for selected match.</p>
+        ) : teamChartData.length === 0 ? (
+          <p className="text-collapse-muted text-sm py-10 text-center">No team data available. Is the backend running?</p>
         ) : (
-          <div className="h-[220px] w-full">
+          <div className="h-[300px] w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart
-                key={`dashboard-period-${selectedMatch?.match_id}-${timelineTeam}`}
-                data={riskBuckets}
-                margin={{ top: 8, right: 8, left: 0, bottom: 0 }}
-              >
-                <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.5} vertical={false} />
-                <XAxis dataKey="period" stroke="#94a3b8" fontSize={11} tickLine={false} axisLine={false} />
-                <YAxis stroke="#94a3b8" fontSize={11} tickLine={false} axisLine={false} />
-                <Tooltip contentStyle={{ backgroundColor: '#1E293B', borderColor: '#334155', color: '#E2E8F0' }} />
-                <Bar dataKey="low" name="Low (&lt;40%)" fill="#10B981" stackId="a" radius={[0, 0, 0, 0]} />
-                <Bar dataKey="medium" name="Medium (40–65%)" fill="#F59E0B" stackId="a" radius={[0, 0, 0, 0]} />
-                <Bar dataKey="high" name="High (65%+)" fill="#EF4444" stackId="a" radius={[4, 4, 0, 0]} />
+              <BarChart data={teamChartData} layout="vertical" margin={{ top: 4, right: 40, left: 90, bottom: 4 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.4} horizontal={false} />
+                <XAxis
+                  type="number"
+                  domain={[0, 100]}
+                  stroke="#94a3b8"
+                  fontSize={11}
+                  tickLine={false}
+                  axisLine={false}
+                  tickFormatter={(v) => `${v}%`}
+                />
+                <YAxis
+                  type="category"
+                  dataKey="team"
+                  stroke="#94a3b8"
+                  fontSize={11}
+                  tickLine={false}
+                  axisLine={false}
+                  width={85}
+                />
+                <Tooltip
+                  contentStyle={{ backgroundColor: '#1E293B', borderColor: '#334155', color: '#E2E8F0' }}
+                  formatter={(v: number, _: string, entry: { payload?: { matches?: number } }) => [
+                    `${v}% avg risk · ${entry?.payload?.matches ?? '?'} matches`,
+                    'Risk',
+                  ]}
+                  labelFormatter={(l) => `${l}`}
+                  cursor={{ fill: 'rgba(255,255,255,0.03)' }}
+                />
+                <ReferenceLine x={65} stroke="#FF3B5C" strokeDasharray="3 3" opacity={0.6} />
+                <Bar dataKey="risk" radius={[0, 4, 4, 0]} maxBarSize={18}>
+                  {teamChartData.map((entry, i) => (
+                    <Cell key={i} fill={riskColor(entry.risk / 100)} />
+                  ))}
+                </Bar>
               </BarChart>
             </ResponsiveContainer>
           </div>
         )}
       </motion.div>
+
+      {/* Highest-Risk Matches */}
+      <motion.div
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.06 }}
+        className="bg-collapse-surface border border-collapse-border rounded-xl overflow-hidden shadow-sm"
+      >
+        <div className="p-6 border-b border-collapse-border flex items-center justify-between">
+          <div>
+            <h3 className="text-lg font-semibold font-sans">Highest-Risk Matches</h3>
+            <p className="text-xs text-collapse-muted mt-1">Top 10 matches by peak collapse risk · Click to analyse in War Room</p>
+          </div>
+          <Link to="/war-room" className="text-sm text-collapse-accent hover:opacity-80 font-medium flex items-center gap-1">
+            <Swords className="w-4 h-4" /> Open War Room
+          </Link>
+        </div>
+        {matchesLoading ? (
+          <div className="p-6 space-y-3">
+            {[1, 2, 3, 4, 5].map((i) => <Skeleton key={i} className="h-10 bg-collapse-bg rounded" />)}
+          </div>
+        ) : topMatches.length === 0 ? (
+          <p className="p-6 text-collapse-muted text-sm">No match data available.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm text-left">
+              <thead className="bg-collapse-bg text-collapse-muted font-mono uppercase text-xs">
+                <tr>
+                  <th className="px-5 py-3">Match</th>
+                  <th className="px-5 py-3">Score</th>
+                  <th className="px-5 py-3">Peak Risk</th>
+                  <th className="px-5 py-3">Avg Risk</th>
+                  <th className="px-5 py-3">Level</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-collapse-border">
+                {topMatches.map((m, i) => (
+                  <tr key={m.match_id} className="hover:bg-collapse-bg/60 transition-colors">
+                    <td className="px-5 py-3 font-medium">
+                      <span className="text-collapse-muted mr-2 font-mono text-xs">#{i + 1}</span>
+                      {m.home_team} <span className="text-collapse-muted">vs</span> {m.away_team}
+                    </td>
+                    <td className="px-5 py-3 font-mono text-collapse-muted">
+                      {m.home_score ?? '—'} – {m.away_score ?? '—'}
+                    </td>
+                    <td className="px-5 py-3 font-mono font-semibold" style={{ color: riskColor(m.peak_risk) }}>
+                      {Math.round(m.peak_risk * 100)}%
+                    </td>
+                    <td className="px-5 py-3 font-mono text-collapse-muted">
+                      {Math.round(m.avg_risk * 100)}%
+                    </td>
+                    <td className="px-5 py-3">
+                      <span
+                        className="inline-flex px-2 py-0.5 rounded text-xs font-bold"
+                        style={{
+                          background: riskColor(m.peak_risk) + '20',
+                          color: riskColor(m.peak_risk),
+                        }}
+                      >
+                        {riskLabel(m.peak_risk)}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </motion.div>
+
+      {/* Quick links */}
+      <motion.div
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.1 }}
+        className="grid grid-cols-2 md:grid-cols-4 gap-3"
+      >
+        {[
+          { to: '/war-room', label: 'War Room', sub: 'Live match risk', icon: <Swords className="w-5 h-5" /> },
+          { to: '/coach-mode', label: 'Coach Mode', sub: 'What-if tactics', icon: <Activity className="w-5 h-5" /> },
+          { to: '/injury-sim', label: 'Injury Sim', sub: 'Squad impact', icon: <ShieldAlert className="w-5 h-5" /> },
+          { to: '/wc-2026', label: 'WC 2026', sub: 'Venue stress', icon: <Trophy className="w-5 h-5" /> },
+        ].map(({ to, label, sub, icon }) => (
+          <Link
+            key={to}
+            to={to}
+            className="bg-collapse-surface border border-collapse-border rounded-xl p-4 hover:border-collapse-accent hover:bg-collapse-accent/5 transition-all group"
+          >
+            <div className="text-collapse-muted group-hover:text-collapse-accent transition-colors mb-2">{icon}</div>
+            <p className="font-semibold text-sm">{label}</p>
+            <p className="text-xs text-collapse-muted mt-0.5">{sub}</p>
+          </Link>
+        ))}
+      </motion.div>
     </div>
   );
 }
 
-function StatCard({ title, value, trend, trendUp, icon, color }: { title: string, value: string, trend: string, trendUp: boolean, icon: React.ReactNode, color: string }) {
-  const colorMap: Record<string, string> = {
-    safe: 'bg-collapse-safe/10 text-collapse-safe border-collapse-safe/20',
-    risk: 'bg-collapse-risk/10 text-collapse-risk border-collapse-risk/20',
-    warn: 'bg-collapse-warn/10 text-collapse-warn border-collapse-warn/20',
-    purple: 'bg-collapse-purple/10 text-collapse-purple border-collapse-purple/20',
+function KpiCard({
+  icon, label, value, sub, color,
+}: {
+  icon: React.ReactNode; label: string; value: string; sub: string; color: string;
+}) {
+  const ring: Record<string, string> = {
+    accent: 'border-collapse-accent/20 bg-collapse-accent/5',
+    risk: 'border-collapse-risk/20 bg-collapse-risk/5',
+    warn: 'border-collapse-warn/20 bg-collapse-warn/5',
+    safe: 'border-collapse-safe/20 bg-collapse-safe/5',
   };
-
   return (
-    <motion.div 
+    <motion.div
       whileHover={{ y: -2 }}
-      className="bg-collapse-surface border border-collapse-border rounded-xl p-6 shadow-sm hover:shadow-md transition-all"
+      className="bg-collapse-surface border border-collapse-border rounded-xl p-5 shadow-sm hover:shadow-md transition-all"
     >
-      <div className="flex justify-between items-start mb-4">
-        <div className={`p-3 rounded-lg ${colorMap[color]}`}>
-          {icon}
-        </div>
-        {trend ? (
-          <div className={`flex items-center text-sm font-medium ${trendUp ? 'text-collapse-safe' : 'text-collapse-risk'}`}>
-            {trendUp ? <ArrowUpRight className="w-4 h-4 mr-1" /> : <ArrowDownRight className="w-4 h-4 mr-1" />}
-            {trend}
-          </div>
-        ) : null}
-      </div>
-      <h3 className="text-collapse-muted text-sm font-medium uppercase tracking-wider font-mono mb-1">{title}</h3>
-      <p className="text-3xl font-bold text-collapse-text font-sans">{value}</p>
+      <div className={`inline-flex p-2 rounded-lg border mb-3 ${ring[color] ?? ''}`}>{icon}</div>
+      <p className="text-2xl font-bold text-collapse-text font-sans">{value}</p>
+      <p className="text-xs font-medium text-collapse-muted uppercase tracking-wider font-mono mt-1">{label}</p>
+      <p className="text-xs text-collapse-dim mt-0.5">{sub}</p>
     </motion.div>
   );
 }

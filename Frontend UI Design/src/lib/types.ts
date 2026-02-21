@@ -97,6 +97,10 @@ export interface FixtureComparison {
   env_stress: number
   base_probability: number
   adjusted_probability: number
+  stats_a: { avg_risk: number; peak_minute: number; matches_analysed: number }
+  stats_b: { avg_risk: number; peak_minute: number; matches_analysed: number }
+  risk_drivers: { factor: string; detail: string; severity: 'low' | 'medium' | 'critical' }[]
+  collapse_windows: { window: string; risk: number; note: string }[]
 }
 
 export interface DashboardStats {

@@ -203,11 +203,23 @@ conn.execute("""
 """)
 conn.execute("DELETE FROM wc2026_venues")
 for v in [
-    (1, "Mexico City", "Mexico", 19.43, -99.13, 7349, 72, 60, 1.18),
-    (2, "New York/New Jersey", "USA", 40.71, -74.01, 33, 78, 65, 1.02),
-    (3, "Los Angeles", "USA", 34.05, -118.24, 230, 75, 55, 0.98),
-    (4, "Toronto", "Canada", 43.65, -79.38, 249, 72, 58, 0.95),
-    (5, "Miami", "USA", 25.76, -80.19, 6, 88, 75, 1.22),
+    # (venue_id, city, country, lat, lon, elevation_ft, june_temp_f, humidity_pct, stress_factor)
+    ( 1, "Mexico City",        "Mexico",  19.3029, -99.1505,  7382,  72, 60, 1.18),
+    ( 2, "Guadalajara",        "Mexico",  20.6898,-103.4599,  5141,  78, 45, 1.15),
+    ( 3, "Monterrey",          "Mexico",  25.6694,-100.2360,  1765,  91, 52, 1.19),
+    ( 4, "Dallas",             "USA",     32.7480, -97.0928,   580,  90, 50, 1.12),
+    ( 5, "Houston",            "USA",     29.6847, -95.4107,    80,  90, 70, 1.16),
+    ( 6, "Miami",              "USA",     25.9580, -80.2390,     8,  88, 75, 1.22),
+    ( 7, "Atlanta",            "USA",     33.7554, -84.4008,  1050,  83, 65, 1.08),
+    ( 8, "Philadelphia",       "USA",     39.9008, -75.1675,    39,  79, 60, 1.03),
+    ( 9, "New York/New Jersey","USA",     40.8136, -74.0745,     5,  78, 65, 1.02),
+    (10, "Boston",             "USA",     42.0909, -71.2643,   200,  72, 55, 0.97),
+    (11, "Kansas City",        "USA",     39.0489, -94.4839,   909,  83, 60, 1.06),
+    (12, "Los Angeles",        "USA",     33.9535,-118.3392,    82,  75, 55, 0.98),
+    (13, "San Francisco",      "USA",     37.4033,-121.9694,    30,  66, 55, 0.95),
+    (14, "Seattle",            "USA",     47.5952,-122.3316,   177,  68, 60, 0.94),
+    (15, "Vancouver",          "Canada",  49.2768,-123.1118,   100,  66, 58, 0.93),
+    (16, "Toronto",            "Canada",  43.6332, -79.4172,   249,  72, 58, 0.95),
 ]:
     conn.execute("INSERT INTO wc2026_venues VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", v)
 

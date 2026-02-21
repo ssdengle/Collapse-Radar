@@ -1,4 +1,5 @@
 """DuckDB helpers and simulation helpers for CollapseOS."""
+from __future__ import annotations
 import os
 import duckdb
 

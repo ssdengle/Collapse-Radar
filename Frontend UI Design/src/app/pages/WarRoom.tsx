@@ -1,10 +1,13 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import Plot from 'react-plotly.js';
-import { ShieldAlert, Timer } from 'lucide-react';
+import {
+  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
+  ResponsiveContainer, ReferenceLine,
+} from 'recharts';
+import { ShieldAlert, Timer, ArrowLeft, Search, Sparkles } from 'lucide-react';
 import { motion } from 'motion/react';
-import { getTimeline, getGoals, getWindow } from '../../lib/api';
-import type { MatchWindow } from '../../lib/types';
+import { getTimeline, getGoals, getWindow, getMatches, getMatchTeams, getCoachSuggestions } from '../../lib/api';
+import type { Match, MatchWindow } from '../../lib/types';
 import { useMatch } from '../context/MatchContext';
 import { Skeleton } from '../components/ui/skeleton';
 
@@ -30,10 +33,22 @@ function getFeatureValue(w: MatchWindow, key: string): number {
 }
 
 export function WarRoom() {
-  const { matchId, team, match } = useMatch();
+  const { matchId, team, match, setMatch } = useMatch();
   const [currentMinute, setCurrentMinute] = useState(65);
   const [debouncedMinute, setDebouncedMinute] = useState(65);
 
+  // Picker local state
+  const [pickerMatch, setPickerMatch] = useState<Match | null>(null);
+  const [filter, setFilter] = useState('');
+
+  const { data: allMatches = [] } = useQuery({ queryKey: ['matches'], queryFn: getMatches });
+  const { data: teamsForMatch = [] } = useQuery({
+    queryKey: ['match-teams', pickerMatch?.match_id],
+    queryFn: () => getMatchTeams(pickerMatch!.match_id),
+    enabled: !!pickerMatch,
+  });
+
+  // All hooks must be declared before any conditional returns
   useEffect(() => {
     const t = setTimeout(() => setDebouncedMinute(currentMinute), 300);
     return () => clearTimeout(t);
@@ -67,6 +82,38 @@ export function WarRoom() {
     return point?.probability ?? timeline[currentMinute]?.probability ?? 0;
   }, [timeline, currentMinute]);
 
+  const riskPercent = Math.round((windowData?.probability ?? currentRisk) * 100);
+
+  // Gemini: only fires when user explicitly clicks "Generate AI Analysis"
+  const [aiEnabled, setAiEnabled] = useState(false);
+  const prevMinuteRef = useRef(debouncedMinute);
+  useEffect(() => {
+    if (prevMinuteRef.current !== debouncedMinute) {
+      prevMinuteRef.current = debouncedMinute;
+      setAiEnabled(false); // reset so user must click again for new minute
+    }
+  }, [debouncedMinute]);
+
+  const { data: aiData, isFetching: aiLoading, refetch: fetchAi } = useQuery({
+    queryKey: ['coach', matchId, debouncedMinute, team],
+    queryFn: () => getCoachSuggestions({
+      team,
+      minute: debouncedMinute,
+      risk_percent: riskPercent,
+      headline: windowData?.headline ?? '',
+      rationale: windowData?.rationale ?? [],
+    }),
+    enabled: aiEnabled && !!windowData && !!team,
+    staleTime: 5 * 60_000,
+    retry: 1,
+  });
+
+  function requestAi() {
+    setAiEnabled(true);
+    // If already enabled (e.g. stale), manually refetch
+    if (aiEnabled) fetchAi();
+  }
+
   const riskDrivers = useMemo(() => {
     if (!windowData) return [];
     const drivers = [windowData.driver_1, windowData.driver_2, windowData.driver_3].filter(Boolean);
@@ -80,89 +127,132 @@ export function WarRoom() {
 
   const maxMinute = timeline.length > 0 ? Math.max(95, ...timeline.map((t) => t.minute)) : 95;
 
-  const traces: any[] = [
-    {
-      x: timeline.map((t) => t.minute),
-      y: timeline.map((t) => t.probability * 100),
-      type: 'scatter',
-      mode: 'lines',
-      name: 'Collapse Risk %',
-      line: { color: '#0EA5E9', width: 2.5 },
-      fill: 'tozeroy',
-      fillcolor: 'rgba(14,165,233,0.08)',
-      hoverinfo: 'y+x',
-    },
-    {
-      x: [currentMinute, currentMinute],
-      y: [0, 100],
-      type: 'scatter',
-      mode: 'lines',
-      name: 'Current Time',
-      line: { color: '#E2E8F0', width: 2, dash: 'solid' },
-      hoverinfo: 'none',
-      showlegend: false,
-    },
-  ];
+  // Running score at currentMinute — counts goals up to that minute.
+  const liveScore = useMemo(() => {
+    if (!match) return { home: 0, away: 0 };
+    const homeLower = match.home_team.toLowerCase();
+    const awayLower = match.away_team.toLowerCase();
+    const home = goals.filter(
+      (g) => g.scoring_team.toLowerCase() === homeLower && g.minute <= currentMinute
+    ).length;
+    const away = goals.filter(
+      (g) => g.scoring_team.toLowerCase() === awayLower && g.minute <= currentMinute
+    ).length;
+    return { home, away };
+  }, [goals, currentMinute, match]);
 
-  const layout = {
-    paper_bgcolor: 'rgba(0,0,0,0)',
-    plot_bgcolor: 'rgba(0,0,0,0)',
-    font: { color: '#E2E8F0', family: 'Inter' },
-    xaxis: {
-      title: 'Match Minute',
-      range: [0, maxMinute],
-      gridcolor: '#334155',
-      zeroline: false,
-      tickfont: { color: '#94a3b8' },
-      fixedrange: true,
-    },
-    yaxis: {
-      title: 'Collapse Risk %',
-      range: [0, 100],
-      gridcolor: '#334155',
-      tickfont: { color: '#94a3b8' },
-      fixedrange: true,
-    },
-    shapes: [
-      ...goals.map((g) => ({
-        type: 'line',
-        x0: g.minute,
-        x1: g.minute,
-        y0: 0,
-        y1: 100,
-        line: { color: '#EF4444', width: 2 },
-      })),
-      {
-        type: 'rect',
-        x0: 0,
-        x1: maxMinute,
-        y0: 65,
-        y1: 100,
-        fillcolor: 'rgba(239,68,68,0.08)',
-        line: { width: 0 },
-      },
-      ...cusumMinutes.map((m) => ({
-        type: 'line',
-        x0: m,
-        x1: m,
-        y0: 0,
-        y1: 100,
-        line: { color: '#10B981', width: 1.5, dash: 'dot' },
-      })),
-    ],
-    annotations: goals.map((g) => ({
-      x: g.minute,
-      y: 97,
-      text: '⚽',
-      showarrow: false,
-      font: { size: 14 },
-    })),
-    showlegend: true,
-    legend: { bgcolor: 'rgba(30, 41, 59, 0.8)', bordercolor: '#334155', font: { color: '#e2e8f0' } },
-    margin: { t: 20, b: 40, l: 50, r: 20 },
-    autosize: true,
-    hovermode: 'x unified' as const,
-  };
+  const filteredMatches = allMatches.filter((m) => {
+    const q = filter.toLowerCase();
+    return !q || m.home_team.toLowerCase().includes(q) || m.away_team.toLowerCase().includes(q);
+  });
+
+  // Clicking a team immediately opens War Room (no confirm step)
+  function selectTeam(m: Match, t: string) {
+    setMatch(m, t);
+  }
+
+  // Show picker when no match confirmed in context
+  if (!match) {
+    const teamOptions = teamsForMatch.length > 0
+      ? teamsForMatch
+      : pickerMatch
+        ? [pickerMatch.home_team, pickerMatch.away_team]
+        : [];
+
+    return (
+      <div className="h-full flex flex-col bg-collapse-bg text-collapse-text overflow-hidden">
+        <header className="h-16 shrink-0 bg-collapse-surface border-b border-collapse-border px-6 flex items-center">
+          <h1 className="text-xl font-bold">War Room</h1>
+          <span className="ml-3 text-sm text-collapse-muted font-mono">
+            {!pickerMatch ? 'Step 1 — select a match' : 'Step 2 — select your team'}
+          </span>
+        </header>
+
+        <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-0 min-h-0">
+          {/* Left — match list */}
+          <div className="flex flex-col border-r border-collapse-border min-h-0">
+            <div className="p-4 border-b border-collapse-border">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-collapse-muted" />
+                <input
+                  type="text"
+                  placeholder="Search teams…"
+                  value={filter}
+                  onChange={(e) => setFilter(e.target.value)}
+                  className="w-full bg-collapse-bg border border-collapse-border rounded-lg pl-9 pr-4 py-2 text-sm text-collapse-text placeholder:text-collapse-muted focus:border-collapse-accent focus:outline-none"
+                />
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto custom-scrollbar divide-y divide-collapse-border">
+              {filteredMatches.length === 0 ? (
+                <p className="p-6 text-collapse-muted text-sm text-center">No matches found.</p>
+              ) : (
+                filteredMatches.map((m) => (
+                  <button
+                    key={m.match_id}
+                    onClick={() => setPickerMatch(m)}
+                    className={`w-full flex items-center justify-between px-5 py-3.5 text-left transition-colors hover:bg-collapse-surface ${
+                      pickerMatch?.match_id === m.match_id
+                        ? 'bg-collapse-accent/10 border-l-2 border-collapse-accent pl-[18px]'
+                        : ''
+                    }`}
+                  >
+                    <span className="font-medium text-sm">
+                      {m.home_team} <span className="text-collapse-muted">vs</span> {m.away_team}
+                    </span>
+                    <span className="text-xs text-collapse-muted font-mono ml-3 shrink-0">
+                      {m.home_score ?? '?'}–{m.away_score ?? '?'}
+                    </span>
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+
+          {/* Right — team picker */}
+          <div className="flex flex-col items-center justify-center p-10 gap-6">
+            {!pickerMatch ? (
+              <div className="text-center space-y-2">
+                <div className="w-16 h-16 rounded-full border-2 border-dashed border-collapse-border flex items-center justify-center mx-auto mb-4">
+                  <Search className="w-6 h-6 text-collapse-muted" />
+                </div>
+                <p className="text-collapse-muted text-sm">Select a match from the left to see the teams</p>
+              </div>
+            ) : (
+              <>
+                <div className="text-center">
+                  <p className="font-semibold text-lg">{pickerMatch.home_team} vs {pickerMatch.away_team}</p>
+                  <p className="text-collapse-muted text-sm mt-1 font-mono">
+                    {pickerMatch.home_score ?? '?'} – {pickerMatch.away_score ?? '?'} · {pickerMatch.competition}
+                  </p>
+                </div>
+                <p className="text-sm text-collapse-muted uppercase tracking-wider font-mono">
+                  Which team are you analysing?
+                </p>
+                <div className="w-full max-w-xs space-y-3">
+                  {teamOptions.map((t) => (
+                    <button
+                      key={t}
+                      onClick={() => selectTeam(pickerMatch, t)}
+                      className="w-full py-4 rounded-xl border border-collapse-border bg-collapse-surface text-sm font-semibold hover:border-collapse-accent hover:bg-collapse-accent/10 hover:text-collapse-accent transition-all"
+                    >
+                      {t}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-xs text-collapse-muted">Click a team to open the War Room</p>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const chartData = timeline.map((t) => ({
+    minute: t.minute,
+    risk: Math.round(t.probability * 1000) / 10,
+  }));
 
   return (
     <div className="h-full flex flex-col bg-collapse-bg text-collapse-text overflow-hidden">
@@ -179,19 +269,31 @@ export function WarRoom() {
           </div>
           <div className="flex items-center gap-4 bg-collapse-bg/50 px-4 py-2 rounded-lg border border-collapse-border">
             <span className="text-2xl font-bold font-mono text-collapse-safe">
-              {match ? `${match.home_score} – ${match.away_score}` : '–'}
+              {match ? `${liveScore.home} – ${liveScore.away}` : '–'}
             </span>
             <div className="h-4 w-[1px] bg-collapse-border"></div>
-            <div className="flex items-center gap-2 text-collapse-warn animate-pulse">
+            <div className="flex items-center gap-2 text-collapse-warn">
               <Timer className="w-4 h-4" />
-              <span className="font-mono font-medium">118:42</span>
+              <span className="font-mono font-medium">{currentMinute}'</span>
             </div>
           </div>
         </div>
         <div className="flex items-center gap-3">
-          <div className="px-3 py-1 bg-collapse-risk/10 border border-collapse-risk/20 rounded text-xs font-bold text-collapse-risk uppercase tracking-wide flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-collapse-risk animate-ping"></span>
-            High Risk Mode
+          <button
+            onClick={() => setMatch(null, '')}
+            className="px-4 py-2 bg-collapse-surface border border-collapse-border rounded-lg text-sm font-semibold text-collapse-text hover:border-collapse-accent hover:text-collapse-accent transition-all flex items-center gap-2"
+          >
+            <ArrowLeft className="w-4 h-4" /> Change Match
+          </button>
+          <div className={`px-3 py-1 rounded text-xs font-bold uppercase tracking-wide flex items-center gap-2 transition-all ${
+            currentRisk > 0.65
+              ? 'bg-collapse-risk/10 border border-collapse-risk/20 text-collapse-risk'
+              : currentRisk > 0.4
+              ? 'bg-yellow-500/10 border border-yellow-500/20 text-yellow-400'
+              : 'bg-green-500/10 border border-green-500/20 text-green-400'
+          }`}>
+            <span className={`w-2 h-2 rounded-full ${currentRisk > 0.65 ? 'bg-collapse-risk animate-ping' : currentRisk > 0.4 ? 'bg-yellow-400' : 'bg-green-400'}`}></span>
+            {currentRisk > 0.65 ? 'High Risk' : currentRisk > 0.4 ? 'Medium Risk' : 'Low Risk'}
           </div>
         </div>
       </header>
@@ -204,19 +306,69 @@ export function WarRoom() {
             {timeline.length === 0 ? (
               <div className="flex-1 flex items-center justify-center h-full min-h-[300px]">
                 <div className="space-y-3 w-full px-8">
-                  <Skeleton className="h-4 w-full bg-collapse-surface" />
-                  <Skeleton className="h-40 w-full bg-collapse-surface" />
-                  <Skeleton className="h-4 w-3/4 bg-collapse-surface" />
+                  <Skeleton className="h-4 w-full bg-collapse-elevated rounded" />
+                  <Skeleton className="h-48 w-full bg-collapse-elevated rounded" />
+                  <Skeleton className="h-4 w-3/4 bg-collapse-elevated rounded" />
+                  <p className="text-collapse-muted text-xs text-center pt-2">Loading timeline…</p>
                 </div>
               </div>
             ) : (
-              <Plot
-                data={traces}
-                layout={layout}
-                useResizeHandler={true}
-                style={{ width: '100%', height: '100%' }}
-                config={{ displayModeBar: false, responsive: true }}
-              />
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart
+                  data={chartData}
+                  margin={{ top: 10, right: 10, left: 0, bottom: 0 }}
+                  onClick={(e) => {
+                    if (e?.activeLabel !== undefined) setCurrentMinute(Number(e.activeLabel));
+                  }}
+                  style={{ cursor: 'crosshair' }}
+                >
+                  <defs>
+                    <linearGradient id="riskGradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#0EA5E9" stopOpacity={0.25} />
+                      <stop offset="95%" stopColor="#0EA5E9" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                  <XAxis
+                    dataKey="minute"
+                    stroke="#94a3b8"
+                    tick={{ fill: '#94a3b8', fontSize: 11 }}
+                    label={{ value: 'Match Minute', position: 'insideBottom', offset: -2, fill: '#94a3b8', fontSize: 11 }}
+                  />
+                  <YAxis
+                    domain={[0, 100]}
+                    stroke="#94a3b8"
+                    tick={{ fill: '#94a3b8', fontSize: 11 }}
+                    label={{ value: 'Risk %', angle: -90, position: 'insideLeft', fill: '#94a3b8', fontSize: 11 }}
+                  />
+                  <Tooltip
+                    contentStyle={{ background: '#1e293b', border: '1px solid #334155', borderRadius: 8, color: '#e2e8f0' }}
+                    formatter={(val: number) => [`${val.toFixed(1)}%`, 'Collapse Risk']}
+                    labelFormatter={(min) => `Minute ${min}`}
+                  />
+                  {/* 65% danger zone */}
+                  <ReferenceLine y={65} stroke="#ef4444" strokeDasharray="4 4" label={{ value: 'High Risk', fill: '#ef4444', fontSize: 10 }} />
+                  {/* Goal markers */}
+                  {goals.map((g) => (
+                    <ReferenceLine key={`goal-${g.minute}`} x={g.minute} stroke="#ef4444" strokeWidth={2} label={{ value: '⚽', position: 'top', fontSize: 12 }} />
+                  ))}
+                  {/* CUSUM alert markers */}
+                  {cusumMinutes.map((m) => (
+                    <ReferenceLine key={`cusum-${m}`} x={m} stroke="#10b981" strokeDasharray="3 3" strokeWidth={1.5} />
+                  ))}
+                  {/* Current minute cursor */}
+                  <ReferenceLine x={currentMinute} stroke="#e2e8f0" strokeWidth={2} />
+                  <Area
+                    type="monotone"
+                    dataKey="risk"
+                    stroke="#0EA5E9"
+                    strokeWidth={2.5}
+                    fill="url(#riskGradient)"
+                    dot={false}
+                    activeDot={{ r: 4, fill: '#0EA5E9' }}
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
             )}
           </div>
 
@@ -265,22 +417,66 @@ export function WarRoom() {
             </div>
           </div>
 
-          {/* Tactical Alert Card */}
-          {currentRisk > 0.65 && (
-            <motion.div 
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="bg-collapse-risk/10 border border-collapse-risk/30 rounded-lg p-4 animate-pulse-slow"
-            >
-              <div className="flex items-start gap-3">
-                <ShieldAlert className="w-6 h-6 text-collapse-risk shrink-0" />
-                <div>
-                  <h4 className="font-bold text-collapse-risk text-sm uppercase mb-1">Critical Alert</h4>
-                  <p className="text-sm text-collapse-text leading-tight">defensive line integrity compromised. Left flank overload detected.</p>
-                </div>
+          {/* Gemini AI Tactical Card — on-demand only */}
+          <div className={`rounded-lg border ${
+            currentRisk > 0.65
+              ? 'bg-collapse-risk/10 border-collapse-risk/30'
+              : currentRisk > 0.4
+              ? 'bg-yellow-500/10 border-yellow-500/30'
+              : 'bg-collapse-elevated/40 border-collapse-border'
+          }`}>
+            <div className="flex items-center justify-between px-4 py-3 border-b border-collapse-border/50">
+              <div className="flex items-center gap-2">
+                {currentRisk > 0.65
+                  ? <ShieldAlert className="w-4 h-4 text-collapse-risk" />
+                  : <Sparkles className="w-4 h-4 text-collapse-accent" />
+                }
+                <h4 className={`font-bold text-xs uppercase tracking-wider ${
+                  currentRisk > 0.65 ? 'text-collapse-risk' : 'text-collapse-accent'
+                }`}>
+                  Gemini Analysis
+                </h4>
+                {aiLoading && (
+                  <span className="w-3 h-3 border border-collapse-accent border-t-transparent rounded-full animate-spin" />
+                )}
               </div>
-            </motion.div>
-          )}
+              {!aiLoading && (
+                <button
+                  onClick={requestAi}
+                  disabled={!windowData}
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-collapse-accent/20 text-collapse-accent hover:bg-collapse-accent/30 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                >
+                  <Sparkles className="w-3 h-3" />
+                  {aiData ? 'Regenerate' : 'Generate'}
+                </button>
+              )}
+            </div>
+            <div className="p-4">
+              {aiLoading ? (
+                <div className="space-y-2">
+                  <Skeleton className="h-2.5 w-full bg-collapse-elevated rounded" />
+                  <Skeleton className="h-2.5 w-4/5 bg-collapse-elevated rounded" />
+                  <Skeleton className="h-2.5 w-3/5 bg-collapse-elevated rounded" />
+                  <p className="text-xs text-collapse-muted pt-1">Gemini is analysing minute {debouncedMinute}…</p>
+                </div>
+              ) : aiData?.suggestions ? (
+                <motion.p
+                  key={`ai-text-${debouncedMinute}`}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  className="text-xs text-collapse-text leading-relaxed whitespace-pre-wrap"
+                >
+                  {aiData.suggestions}
+                </motion.p>
+              ) : (
+                <p className="text-xs text-collapse-muted italic text-center py-2">
+                  {windowData
+                    ? 'Click Generate for AI tactical analysis of this minute'
+                    : 'Waiting for match data…'}
+                </p>
+              )}
+            </div>
+          </div>
 
           <div className="border-t border-collapse-border my-2"></div>
 
@@ -311,28 +507,48 @@ export function WarRoom() {
           {/* Pitch Territory Tilt */}
           <div className="flex-1 flex flex-col justify-end">
              <h3 className="text-sm font-medium text-collapse-muted uppercase tracking-wider mb-4">Territory Tilt</h3>
-             <div className="aspect-[2/3] bg-collapse-bg border border-collapse-border rounded-lg relative p-2">
-                {/* Simplified Pitch SVG */}
-                <svg width="100%" height="100%" viewBox="0 0 100 150">
-                  <rect x="0" y="0" width="100" height="150" fill="none" stroke="#334155" strokeWidth="1" />
-                  <line x1="0" y1="75" x2="100" y2="75" stroke="#334155" strokeWidth="1" />
-                  <circle cx="50" cy="75" r="10" fill="none" stroke="#334155" strokeWidth="1" />
-                  <rect x="25" y="0" width="50" height="15" fill="none" stroke="#334155" strokeWidth="1" />
-                  <rect x="25" y="135" width="50" height="15" fill="none" stroke="#334155" strokeWidth="1" />
-                  
-                  {/* Heatmap overlay simulation */}
-                  <defs>
-                    <radialGradient id="tiltGradient" cx="50%" cy="50%" r="50%" fx="50%" fy="50%">
-                      <stop offset="0%" stopColor="#EF4444" stopOpacity="0.4" />
-                      <stop offset="100%" stopColor="#EF4444" stopOpacity="0" />
-                    </radialGradient>
-                  </defs>
-                  <circle cx="30" cy="110" r="25" fill="url(#tiltGradient)" />
-                </svg>
-                <div className="absolute bottom-2 left-2 right-2 bg-collapse-surface/80 backdrop-blur px-2 py-1 rounded border border-collapse-border text-xs text-center">
-                  <span className="text-collapse-risk font-bold">Deep Pressure</span>
-                </div>
-             </div>
+             {/* key forces full re-render when minute or data changes */}
+             {(() => {
+               const tilt = windowData?.features.territory_tilt ?? 0;
+               // tilt > 0 means opponent pressure (defending deep), < 0 means team pressing high
+               const pressure = Math.min(1, Math.abs(tilt));
+               const isUnderPressure = tilt > 0;
+               // Map pressure 0→1 to vertical position on pitch (50=midfield → 125=deep in own half)
+               const hotspotY = isUnderPressure ? 75 + pressure * 55 : 75 - pressure * 55;
+               const hotspotR = 15 + pressure * 20;
+               const color = isUnderPressure ? '#EF4444' : '#10B981';
+               const label = pressure < 0.2 ? 'Balanced' : isUnderPressure
+                 ? pressure > 0.6 ? 'Deep Pressure' : 'Under Pressure'
+                 : pressure > 0.6 ? 'High Press' : 'Pressing';
+               const labelColor = isUnderPressure ? '#EF4444' : '#10B981';
+               const pct = Math.round(pressure * 100);
+               return (
+                 <div key={`tilt-${debouncedMinute}`} className="aspect-[2/3] bg-collapse-bg border border-collapse-border rounded-lg relative p-2">
+                   <svg width="100%" height="100%" viewBox="0 0 100 150">
+                     {/* Pitch outline */}
+                     <rect x="0" y="0" width="100" height="150" fill="none" stroke="#334155" strokeWidth="1" />
+                     <line x1="0" y1="75" x2="100" y2="75" stroke="#334155" strokeWidth="1" />
+                     <circle cx="50" cy="75" r="10" fill="none" stroke="#334155" strokeWidth="1" />
+                     <rect x="25" y="0" width="50" height="15" fill="none" stroke="#334155" strokeWidth="1" />
+                     <rect x="25" y="135" width="50" height="15" fill="none" stroke="#334155" strokeWidth="1" />
+                     <defs>
+                       <radialGradient id="tiltGrad" cx="50%" cy="50%" r="50%">
+                         <stop offset="0%" stopColor={color} stopOpacity="0.5" />
+                         <stop offset="100%" stopColor={color} stopOpacity="0" />
+                       </radialGradient>
+                     </defs>
+                     <circle cx="50" cy={hotspotY} r={hotspotR} fill="url(#tiltGrad)" />
+                     {/* Pressure % bar on left edge */}
+                     <rect x="2" y="2" width="4" height="146" fill="#1e293b" rx="2" />
+                     <rect x="2" y={2 + (1 - pressure) * 146} width="4" height={pressure * 146} fill={color} rx="2" />
+                   </svg>
+                   <div className="absolute bottom-2 left-2 right-2 bg-collapse-surface/80 backdrop-blur px-2 py-1 rounded border border-collapse-border text-xs text-center">
+                     <span style={{ color: labelColor }} className="font-bold">{label}</span>
+                     {windowData && <span className="text-collapse-muted ml-2">{pct}%</span>}
+                   </div>
+                 </div>
+               );
+             })()}
           </div>
         </div>
       </div>

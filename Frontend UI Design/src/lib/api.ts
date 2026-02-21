@@ -51,6 +51,23 @@ export function getMatchStats(matchId: number) {
   return fetchJSON<MatchStats>(`/api/match/${matchId}/stats`)
 }
 
+export function getTeamRisk() {
+  return fetchJSON<{ team: string; avg_risk: number; matches: number }[]>('/api/dashboard/team_risk')
+}
+
+export function getTopMatches() {
+  return fetchJSON<{
+    match_id: number
+    home_team: string
+    away_team: string
+    home_score: number
+    away_score: number
+    match_date: string
+    peak_risk: number
+    avg_risk: number
+  }[]>('/api/dashboard/top_matches')
+}
+
 // ── War Room ─────────────────────────────────────────────
 export function getTimeline(matchId: number, team: string) {
   return fetchJSON<TimelinePoint[]>(

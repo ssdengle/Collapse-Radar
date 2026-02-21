@@ -11,21 +11,19 @@ interface MatchContextValue {
 
 const MatchContext = createContext<MatchContextValue | null>(null);
 
-const DEFAULT_TEAM = 'Spain';
-
 export function MatchProvider({ children }: { children: React.ReactNode }) {
-  const [matchId, setMatchId] = useState(DEMO_MATCH_ID);
-  const [team, setTeam] = useState(DEFAULT_TEAM);
+  const [matchId, setMatchId] = useState(0);
+  const [team, setTeam] = useState('');
   const [match, setMatchState] = useState<Match | null>(null);
 
   const setMatch = useCallback((m: Match | null, t: string) => {
     if (m) {
       setMatchId(m.match_id);
-      setTeam(t || DEFAULT_TEAM);
+      setTeam(t);
       setMatchState(m);
     } else {
-      setMatchId(DEMO_MATCH_ID);
-      setTeam(DEFAULT_TEAM);
+      setMatchId(0);
+      setTeam('');
       setMatchState(null);
     }
   }, []);
@@ -46,8 +44,8 @@ export function useMatch() {
   const ctx = useContext(MatchContext);
   if (!ctx) {
     return {
-      matchId: DEMO_MATCH_ID,
-      team: DEFAULT_TEAM,
+      matchId: 0,
+      team: '',
       match: null,
       setMatch: () => {},
     };
