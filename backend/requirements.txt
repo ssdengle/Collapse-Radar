@@ -1,0 +1,13 @@
+fastapi>=0.109.0
+uvicorn>=0.27.0
+duckdb>=0.10.0
+statsbombpy>=1.0
+pandas>=2.1.0
+numpy>=1.26.0
+scikit-learn>=1.4.0
+ruptures>=1.1.9
+networkx>=3.2.0
+requests>=2.31.0
+pyarrow>=14.0.0
+python-dotenv>=1.0.0
+google-generativeai>=0.8.0
