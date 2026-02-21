@@ -2,20 +2,15 @@ import { Outlet, useLocation } from "react-router";
 import { NavLink } from "../components/router-components";
 import { 
   LayoutDashboard, 
-  BarChart2, 
   Globe, 
   ShieldCheck, 
-  Settings, 
   Bell, 
   Search, 
   Menu,
   ChevronRight,
-  User,
-  LogOut,
   Swords,
   BrainCircuit,
-  Stethoscope,
-  Palette
+  Stethoscope
 } from "lucide-react";
 import { useState } from "react";
 import { clsx } from "clsx";
@@ -60,31 +55,7 @@ export function Layout() {
           <NavItem to="/coach-mode" icon={<BrainCircuit size={20} />} label="Coach Mode" isOpen={isSidebarOpen} />
           <NavItem to="/injury-sim" icon={<Stethoscope size={20} />} label="Injury Sim" isOpen={isSidebarOpen} />
           <NavItem to="/wc-2026" icon={<Globe size={20} />} label="WC 2026" isOpen={isSidebarOpen} />
-          
-          <div className="my-6 border-t border-collapse-border/50 mx-3" />
-          
-          <NavItem to="/theme" icon={<Palette size={20} />} label="Theme Showcase" isOpen={isSidebarOpen} />
-          <NavItem to="/settings" icon={<Settings size={20} />} label="Settings" isOpen={isSidebarOpen} />
         </nav>
-
-        {/* User Profile */}
-        <div className="p-4 border-t border-collapse-border shrink-0">
-          <div className={clsx(
-            "flex items-center gap-3 p-2 rounded-lg hover:bg-collapse-border/50 transition-colors cursor-pointer",
-            !isSidebarOpen && "justify-center"
-          )}>
-            <div className="w-10 h-10 rounded-full bg-collapse-muted flex items-center justify-center shrink-0 border-2 border-collapse-bg">
-              <User className="w-5 h-5 text-collapse-text" />
-            </div>
-            {isSidebarOpen && (
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium truncate">Admin User</p>
-                <p className="text-xs text-collapse-muted truncate">admin@system.local</p>
-              </div>
-            )}
-            {isSidebarOpen && <ChevronRight className="w-4 h-4 text-collapse-muted" />}
-          </div>
-        </div>
 
         {/* Toggle Button */}
         <button 

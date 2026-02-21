@@ -27,6 +27,12 @@
     background-color: #0F172A;
 }
 
+/* Zoom control above header and bottom panel so it's always visible */
+.leaflet-control-zoom {
+  z-index: 1100 !important;
+  margin-top: 80px !important;
+}
+
 /* Custom Marker Pulse */
 @keyframes marker-pulse {
   0% {
@@ -42,4 +48,10 @@
 
 .custom-div-icon div {
   animation: marker-pulse 2s infinite;
+}
+
+/* Custom markers (e.g. WC 2026 venues): no default icon background */
+.leaflet-div-icon.custom-marker {
+  background: none !important;
+  border: none !important;
 }

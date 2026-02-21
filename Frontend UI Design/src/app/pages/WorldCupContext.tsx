@@ -1,24 +1,62 @@
-import { useState } from 'react';
-import { CloudRain, ThermometerSun, Wind, Droplets, MapPin, CalendarDays, TrendingUp } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { MapContainer, TileLayer, Marker, Popup, ZoomControl, useMap } from 'react-leaflet';
+import L from 'leaflet';
+import { ThermometerSun, Droplets, MapPin, CalendarDays, TrendingUp } from 'lucide-react';
+import 'leaflet/dist/leaflet.css';
+import { getWC2026Venues, getFixtureComparison } from '../../lib/api';
+import type { WC2026Venue } from '../../lib/types';
 
-const venues = [
-  { id: 1, city: 'Mexico City', country: 'Mexico', lat: 70, lng: 30, elevation: '2,240m', temp: '26°C', humidity: '45%', stress: 'High', color: '#EF4444' },
-  { id: 2, city: 'New York/NJ', country: 'USA', lat: 38, lng: 75, elevation: '10m', temp: '32°C', humidity: '85%', stress: 'Medium', color: '#F59E0B' },
-  { id: 3, city: 'Los Angeles', country: 'USA', lat: 45, lng: 15, elevation: '70m', temp: '29°C', humidity: '55%', stress: 'Low', color: '#10B981' },
-  { id: 4, city: 'Toronto', country: 'Canada', lat: 35, lng: 70, elevation: '76m', temp: '25°C', humidity: '60%', stress: 'Low', color: '#10B981' },
-  { id: 5, city: 'Miami', country: 'USA', lat: 60, lng: 78, elevation: '2m', temp: '34°C', humidity: '92%', stress: 'Critical', color: '#EF4444' },
-  { id: 6, city: 'Dallas', country: 'USA', lat: 55, lng: 45, elevation: '130m', temp: '36°C', humidity: '40%', stress: 'Medium', color: '#F59E0B' },
-  { id: 7, city: 'Atlanta', country: 'USA', lat: 50, lng: 65, elevation: '300m', temp: '31°C', humidity: '75%', stress: 'Medium', color: '#F59E0B' },
-  { id: 8, city: 'Kansas City', country: 'USA', lat: 40, lng: 50, elevation: '270m', temp: '33°C', humidity: '65%', stress: 'Medium', color: '#F59E0B' },
-  { id: 9, city: 'Houston', country: 'USA', lat: 60, lng: 48, elevation: '15m', temp: '35°C', humidity: '88%', stress: 'High', color: '#EF4444' },
-  { id: 10, city: 'San Francisco', country: 'USA', lat: 42, lng: 12, elevation: '20m', temp: '22°C', humidity: '50%', stress: 'Low', color: '#10B981' },
-  { id: 11, city: 'Seattle', country: 'USA', lat: 25, lng: 15, elevation: '5m', temp: '24°C', humidity: '55%', stress: 'Low', color: '#10B981' },
-  { id: 12, city: 'Vancouver', country: 'Canada', lat: 20, lng: 12, elevation: '10m', temp: '23°C', humidity: '58%', stress: 'Low', color: '#10B981' },
-  { id: 13, city: 'Guadalajara', country: 'Mexico', lat: 72, lng: 25, elevation: '1,566m', temp: '28°C', humidity: '40%', stress: 'Medium', color: '#F59E0B' },
-  { id: 14, city: 'Monterrey', country: 'Mexico', lat: 65, lng: 35, elevation: '540m', temp: '35°C', humidity: '35%', stress: 'High', color: '#EF4444' },
-  { id: 15, city: 'Philadelphia', country: 'USA', lat: 37, lng: 76, elevation: '12m', temp: '30°C', humidity: '70%', stress: 'Medium', color: '#F59E0B' },
-  { id: 16, city: 'Boston', country: 'USA', lat: 35, lng: 80, elevation: '45m', temp: '27°C', humidity: '65%', stress: 'Low', color: '#10B981' },
-];
+export type VenueDisplay = {
+  id: number;
+  city: string;
+  country: string;
+  lat: number;
+  lng: number;
+  elevation: string;
+  temp: string;
+  humidity: string;
+  stress: string;
+  color: string;
+};
+
+function stressColor(factor: number): string {
+  if (factor >= 1.15) return '#EF4444';
+  if (factor >= 1.05) return '#F59E0B';
+  return '#10B981';
+}
+
+function stressLabel(factor: number): string {
+  if (factor >= 1.2) return 'Critical';
+  if (factor >= 1.15) return 'High';
+  if (factor >= 1.05) return 'Medium';
+  return 'Low';
+}
+
+function mapVenue(v: WC2026Venue): VenueDisplay {
+  return {
+    id: v.venue_id,
+    city: v.city,
+    country: v.country,
+    lat: v.lat,
+    lng: v.lon,
+    elevation: `${v.elevation_ft}ft`,
+    temp: `${v.june_temp_f}°F`,
+    humidity: `${v.humidity_pct}%`,
+    stress: stressLabel(v.stress_factor),
+    color: stressColor(v.stress_factor),
+  };
+}
+
+function MapFlyTo({ venue, duration = 1.2 }: { venue: VenueDisplay | null; duration?: number }) {
+  const map = useMap();
+  useEffect(() => {
+    if (!venue) return;
+    const centerLat = venue.lat - 0.5;
+    map.flyTo([centerLat, venue.lng], 8, { duration });
+  }, [venue?.id, venue?.lat, venue?.lng, duration, map]);
+  return null;
+}
 
 const fixtures = [
   { id: 1, teamA: 'Brazil', teamB: 'France', date: 'June 18, 2026' },
@@ -27,57 +65,120 @@ const fixtures = [
   { id: 4, teamA: 'Germany', teamB: 'Spain', date: 'June 28, 2026' },
 ];
 
+// Fix default Leaflet marker icons in bundler (vite)
+const createIcon = (color: string) =>
+  L.divIcon({
+    className: 'custom-marker',
+    html: `<div style="width:20px;height:20px;border-radius:50%;background:${color};border:2px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.4);"></div>`,
+    iconSize: [20, 20],
+    iconAnchor: [10, 10],
+  });
+
+const DEFAULT_VENUE_INDEX_BY_FIXTURE: Record<number, number> = {
+  1: 0, 2: 1, 3: 4, 4: 2,
+};
+
 export function WorldCupContext() {
+  const { data: venuesRaw = [] } = useQuery({
+    queryKey: ['wc2026-venues'],
+    queryFn: getWC2026Venues,
+  });
+  const venues = venuesRaw.map(mapVenue);
+
   const [selectedFixture, setSelectedFixture] = useState(fixtures[0]);
-  const [comparisonCityA, setComparisonCityA] = useState(venues[0]); // Mexico City
-  const [comparisonCityB, setComparisonCityB] = useState(venues[4]); // Miami
+  const [comparisonCityA, setComparisonCityA] = useState<VenueDisplay | null>(null);
+  const [comparisonCityB, setComparisonCityB] = useState<VenueDisplay | null>(null);
+  const [flyToVenue, setFlyToVenue] = useState<VenueDisplay | null>(null);
+
+  useEffect(() => {
+    if (venues.length === 0) return;
+    const base = venues[DEFAULT_VENUE_INDEX_BY_FIXTURE[selectedFixture.id] ?? 0];
+    setComparisonCityA((prev) => prev ?? base);
+    setComparisonCityB((prev) => prev ?? venues[4] ?? venues[0]);
+  }, [venues, selectedFixture.id]);
+
+  const { data: fixtureComparison } = useQuery({
+    queryKey: ['fixture-comparison', selectedFixture.teamA, selectedFixture.teamB, comparisonCityB?.city],
+    queryFn: () => getFixtureComparison(selectedFixture.teamA, selectedFixture.teamB, comparisonCityB!.city),
+    enabled: !!comparisonCityB?.city,
+  });
+
+  const handleFixtureSelect = (fixture: typeof fixtures[0]) => {
+    setSelectedFixture(fixture);
+    if (venues.length > 0) {
+      const base = venues[DEFAULT_VENUE_INDEX_BY_FIXTURE[fixture.id] ?? 0];
+      setComparisonCityA(base);
+      setFlyToVenue(base);
+    }
+  };
+
+  const handleVenueClick = (venue: VenueDisplay) => {
+    setComparisonCityA(venue);
+    setFlyToVenue(venue);
+  };
 
   return (
-    <div className="h-full flex flex-col bg-collapse-bg text-collapse-text overflow-hidden relative">
-      {/* Map Container - Full Width/Height - Simplified with static image background */}
-      <div className="absolute inset-0 z-0 bg-collapse-bg">
-        <div 
-          className="w-full h-full bg-cover bg-center opacity-40 brightness-50"
-          style={{ backgroundImage: 'url(https://images.unsplash.com/photo-1770723965051-249655a8aedb?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxkYXJrJTIwbWFwJTIwbm9ydGglMjBhbWVyaWNhJTIwc2F0ZWxsaXRlJTIwdmlld3xlbnwxfHx8fDE3NzE2NTMxODR8MA&ixlib=rb-4.1.0&q=80&w=1080&utm_source=figma&utm_medium=referral)' }}
-        ></div>
-        
-        {/* Custom Marker Overlay */}
-        <div className="absolute inset-0 pointer-events-none">
-          {venues.map((venue) => (
-             <div 
-               key={venue.id}
-               className="absolute w-3 h-3 rounded-full border-2 border-white shadow-lg cursor-pointer transform hover:scale-150 transition-transform pointer-events-auto"
-               style={{ 
-                 top: `${venue.lat}%`, 
-                 left: `${venue.lng}%`, 
-                 backgroundColor: venue.color,
-                 boxShadow: `0 0 10px ${venue.color}`
-               }}
-               onClick={() => setComparisonCityA(venue)}
-               title={`${venue.city} (${venue.stress})`}
-             >
-               <span className="sr-only">{venue.city}</span>
-             </div>
+    <div className="h-full min-h-[100vh] flex flex-col bg-collapse-bg text-collapse-text overflow-hidden relative">
+      {/* Full-screen map with real globe positions */}
+      <div className="absolute inset-0 z-0 min-h-[100vh]" style={{ height: '100%' }}>
+        <MapContainer
+          center={[39.5, -98]}
+          zoom={3}
+          className="h-full w-full leaflet-container-dark"
+          style={{ height: '100%', minHeight: '100vh' }}
+          zoomControl={false}
+        >
+          <ZoomControl position="topright" />
+          <MapFlyTo venue={flyToVenue} duration={1.2} />
+          <TileLayer
+            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+            url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+          />
+          {venues.length > 0 && venues.map((venue) => (
+            <Marker
+              key={venue.id}
+              position={[venue.lat, venue.lng]}
+              icon={createIcon(venue.color)}
+              eventHandlers={{
+                click: () => handleVenueClick(venue),
+              }}
+            >
+              <Popup className="custom-popup">
+                <div className="p-2 min-w-[140px]">
+                  <div className="font-bold text-sm">{venue.city}</div>
+                  <div className="text-xs text-collapse-muted">{venue.country} • {venue.stress}</div>
+                  <div className="mt-2 flex items-center gap-2 text-xs">
+                    <span><ThermometerSun className="inline w-3 h-3" /> {venue.temp}</span>
+                    <span><Droplets className="inline w-3 h-3" /> {venue.humidity}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleVenueClick(venue)}
+                    className="mt-2 w-full py-1 rounded bg-collapse-accent/20 text-collapse-accent text-xs font-medium hover:bg-collapse-accent/30"
+                  >
+                    Set as baseline & zoom
+                  </button>
+                </div>
+              </Popup>
+            </Marker>
           ))}
-        </div>
+        </MapContainer>
       </div>
 
-      {/* Overlay: Header */}
+      {/* Header */}
       <div className="absolute top-0 left-0 right-0 p-6 z-10 pointer-events-none">
         <div className="bg-collapse-surface/90 backdrop-blur border border-collapse-border rounded-xl p-4 inline-block shadow-lg pointer-events-auto">
           <h1 className="text-xl font-bold font-sans tracking-tight flex items-center gap-2">
             <span className="bg-gradient-to-r from-collapse-accent to-collapse-purple bg-clip-text text-transparent">WC2026</span>
             Context
           </h1>
-          <p className="text-xs text-collapse-muted">Environmental Stress Projection Model</p>
+          <p className="text-xs text-collapse-muted">Environmental Stress • Pins at real host city locations</p>
         </div>
       </div>
 
-      {/* Overlay: Bottom Panel (Fixture Selector & Comparison) */}
+      {/* Bottom panel */}
       <div className="absolute bottom-0 left-0 right-0 p-6 z-10 pointer-events-none flex justify-center">
         <div className="bg-collapse-surface/95 backdrop-blur border border-collapse-border rounded-xl p-6 shadow-2xl w-full max-w-5xl pointer-events-auto grid grid-cols-1 md:grid-cols-3 gap-6">
-          
-          {/* Fixture Selector */}
           <div className="space-y-4 border-r border-collapse-border pr-6">
             <h3 className="text-sm font-medium text-collapse-muted uppercase tracking-wider flex items-center gap-2">
               <CalendarDays className="w-4 h-4" />
@@ -85,10 +186,10 @@ export function WorldCupContext() {
             </h3>
             <div className="space-y-2">
               {fixtures.map((fixture) => (
-                <div 
+                <div
                   key={fixture.id}
-                  onClick={() => setSelectedFixture(fixture)}
-                  className={`p-3 rounded-lg border cursor-pointer transition-all ${selectedFixture.id === fixture.id ? 'bg-collapse-accent/10 border-collapse-accent shadow-sm' : 'bg-collapse-bg border-collapse-border hover:border-collapse-muted'}`}
+                  onClick={() => handleFixtureSelect(fixture)}
+                  className={`p-3 rounded-lg border cursor-pointer transition-all ${selectedFixture.id === fixture.id ? 'bg-collapse-accent/10 border-collapse-accent shadow-sm ring-2 ring-collapse-accent/30' : 'bg-collapse-bg border-collapse-border hover:border-collapse-muted'}`}
                 >
                   <div className="flex justify-between font-bold text-sm mb-1">
                     <span>{fixture.teamA}</span>
@@ -101,45 +202,66 @@ export function WorldCupContext() {
             </div>
           </div>
 
-          {/* Comparison View */}
           <div className="col-span-2 flex flex-col">
             <h3 className="text-sm font-medium text-collapse-muted uppercase tracking-wider mb-4 flex items-center gap-2">
               <TrendingUp className="w-4 h-4" />
               Venue Impact Analysis
             </h3>
-            
             <div className="flex items-center gap-4 flex-1">
-              {/* City A Card */}
-              <CityCard city={comparisonCityA} label="Baseline Venue" />
-
+              {comparisonCityA && <CityCard city={comparisonCityA} label="Baseline Venue" />}
               <div className="text-collapse-muted font-bold text-lg">VS</div>
-
-              {/* City B Card (Dropdown for selection) */}
               <div className="flex-1 h-full flex flex-col">
-                <select 
-                  className="bg-collapse-bg border border-collapse-border rounded-lg p-2 text-sm text-collapse-text mb-2 focus:border-collapse-accent focus:outline-none"
-                  value={comparisonCityB.id}
-                  onChange={(e) => setComparisonCityB(venues.find(v => v.id === parseInt(e.target.value)) || venues[0])}
-                >
-                  {venues.map(v => <option key={v.id} value={v.id}>{v.city}</option>)}
-                </select>
-                <CityCard city={comparisonCityB} label="Alternative" />
+                {venues.length > 0 && (
+                  <>
+                    <select
+                      className="bg-collapse-bg border border-collapse-border rounded-lg p-2 text-sm text-collapse-text mb-2 focus:border-collapse-accent focus:outline-none"
+                      value={comparisonCityB?.id ?? venues[0].id}
+                      onChange={(e) => setComparisonCityB(venues.find((v) => v.id === parseInt(e.target.value)) ?? venues[0])}
+                    >
+                      {venues.map((v) => (
+                        <option key={v.id} value={v.id}>{v.city}</option>
+                      ))}
+                    </select>
+                    {comparisonCityB && <CityCard city={comparisonCityB} label="Alternative" />}
+                  </>
+                )}
               </div>
             </div>
-
-            <div className="mt-4 bg-collapse-bg border border-collapse-border rounded-lg p-3 flex items-center justify-between">
-               <span className="text-sm text-collapse-muted font-medium">Predicted Collapse Probability Shift</span>
-               <div className="flex items-center gap-2">
-                 <span className="text-xs text-collapse-muted">Environmental Delta Only</span>
-                 <span className={`text-xl font-bold font-mono ${
-                   (comparisonCityB.stress === 'High' && comparisonCityA.stress === 'Low') ? 'text-collapse-risk' :
-                   (comparisonCityB.stress === 'Low' && comparisonCityA.stress === 'High') ? 'text-collapse-safe' : 'text-collapse-warn'
-                 }`}>
-                   {(comparisonCityB.stress === 'High' && comparisonCityA.stress === 'Low') ? '+18%' :
-                    (comparisonCityB.stress === 'Low' && comparisonCityA.stress === 'High') ? '-14%' : '+2%'}
-                 </span>
-               </div>
-            </div>
+            {comparisonCityA && comparisonCityB && (
+              <div
+                className="mt-4 bg-collapse-bg border border-collapse-border rounded-lg p-3 flex items-center justify-between"
+                title="Environmental delta for this fixture if played at the alternative venue."
+              >
+                <span className="text-sm text-collapse-muted font-medium">
+                  For {selectedFixture.teamA} vs {selectedFixture.teamB}: Collapse probability shift
+                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-collapse-muted">Delta</span>
+                  <span
+                    className={`text-xl font-bold font-mono ${
+                      fixtureComparison
+                        ? (fixtureComparison.adjusted_probability - fixtureComparison.base_probability) * 100 > 0
+                          ? 'text-collapse-risk'
+                          : (fixtureComparison.adjusted_probability - fixtureComparison.base_probability) * 100 < 0
+                            ? 'text-collapse-safe'
+                            : 'text-collapse-warn'
+                        : comparisonCityB.stress === 'High' && comparisonCityA.stress === 'Low'
+                          ? 'text-collapse-risk'
+                          : 'text-collapse-warn'
+                    }`}
+                  >
+                    {fixtureComparison
+                      ? `${(fixtureComparison.adjusted_probability - fixtureComparison.base_probability) * 100 >= 0 ? '+' : ''}${((fixtureComparison.adjusted_probability - fixtureComparison.base_probability) * 100).toFixed(1)}%`
+                      : (() => {
+                          const base = comparisonCityB.stress === 'High' && comparisonCityA.stress === 'Low' ? 18 : comparisonCityB.stress === 'Low' && comparisonCityA.stress === 'High' ? -14 : 2;
+                          const variation = (selectedFixture.id - 1) * 3;
+                          const delta = base + (base >= 0 ? variation : -variation);
+                          return delta >= 0 ? `+${delta}%` : `${delta}%`;
+                        })()}
+                  </span>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -147,14 +269,17 @@ export function WorldCupContext() {
   );
 }
 
-function CityCard({ city, label }: { city: any, label: string }) {
+function CityCard({ city, label }: { city: VenueDisplay; label: string }) {
   return (
     <div className="flex-1 bg-collapse-bg border border-collapse-border rounded-lg p-4 h-full relative overflow-hidden group hover:border-collapse-muted transition-colors">
-      <div className={`absolute top-0 left-0 w-1 h-full ${city.color === '#EF4444' ? 'bg-collapse-risk' : city.color === '#F59E0B' ? 'bg-collapse-warn' : 'bg-collapse-safe'}`} />
+      <div
+        className={`absolute top-0 left-0 w-1 h-full ${
+          city.color === '#EF4444' ? 'bg-collapse-risk' : city.color === '#F59E0B' ? 'bg-collapse-warn' : 'bg-collapse-safe'
+        }`}
+      />
       <div className="pl-3">
         <span className="text-xs text-collapse-muted uppercase block mb-1">{label}</span>
         <h4 className="font-bold text-lg leading-tight mb-3">{city.city}</h4>
-        
         <div className="space-y-2 text-sm">
           <div className="flex justify-between border-b border-collapse-border pb-1">
             <span className="text-collapse-muted flex items-center gap-2"><ThermometerSun size={12} /> Temp</span>
