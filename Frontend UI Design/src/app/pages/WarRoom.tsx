@@ -1,49 +1,89 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import Plot from 'react-plotly.js';
-import { AlertTriangle, TrendingUp, ShieldAlert, Timer, ArrowRight, Activity, Thermometer, Wind, Trophy } from 'lucide-react';
+import { ShieldAlert, Timer } from 'lucide-react';
 import { motion } from 'motion/react';
+import { getTimeline, getGoals, getWindow } from '../../lib/api';
+import type { MatchWindow } from '../../lib/types';
+import { useMatch } from '../context/MatchContext';
+import { Skeleton } from '../components/ui/skeleton';
 
-const timeline = Array.from({ length: 96 }, (_, i) => {
-  // Simulate a collapse risk curve that spikes after minute 60
-  let baseRisk = 0.15 + (i * 0.005);
-  if (i > 60) baseRisk += (i - 60) * 0.02; // Acceleration
-  if (i > 80) baseRisk += (i - 80) * 0.01; // Panic
-  
-  // Add some noise
-  const noise = (Math.sin(i * 0.5) * 0.05);
-  const prob = Math.min(0.99, Math.max(0.05, baseRisk + noise));
-  
-  return {
-    minute: i,
-    probability: prob
+function formatFeatureName(key: string): string {
+  const names: Record<string, string> = {
+    pass_accuracy_slope: 'Pass Accuracy Drop',
+    turnover_per_min: 'Turnover Rate',
+    turnover_burstiness: 'Turnover Clustering',
+    defensive_actions_per_min: 'Defensive Overload',
+    final_third_entries_per_min: 'Final Third Pressure',
+    shots_conceded_per_min: 'Shots Conceded',
+    tempo_variance: 'Tempo Chaos',
+    territory_tilt: 'Territory Lost',
+    env_stress_multiplier: 'Environmental Stress',
   };
-});
+  return names[key] ?? key;
+}
 
-const goals = [
-  { minute: 32, team: 'home' },
-  { minute: 67, team: 'away' },
-  { minute: 88, team: 'away' }
-];
-
-const cusumMinutes = [45, 62, 75];
-
-const riskDrivers = [
-  { name: 'Defensive Fatigue', value: 85, color: '#EF4444' },
-  { name: 'Midfield Gaps', value: 72, color: '#F59E0B' },
-  { name: 'Press Intensity Drop', value: 64, color: '#EAB308' },
-];
+function getFeatureValue(w: MatchWindow, key: string): number {
+  const v = w.features[key as keyof typeof w.features];
+  if (v == null) return 0;
+  return Math.round(Math.min(100, Math.max(0, v * 100)));
+}
 
 export function WarRoom() {
+  const { matchId, team, match } = useMatch();
   const [currentMinute, setCurrentMinute] = useState(65);
+  const [debouncedMinute, setDebouncedMinute] = useState(65);
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedMinute(currentMinute), 300);
+    return () => clearTimeout(t);
+  }, [currentMinute]);
+
+  const { data: timeline = [] } = useQuery({
+    queryKey: ['timeline', matchId, team],
+    queryFn: () => getTimeline(matchId, team),
+    enabled: !!matchId && !!team,
+  });
+
+  const { data: goals = [] } = useQuery({
+    queryKey: ['goals', matchId],
+    queryFn: () => getGoals(matchId),
+    enabled: !!matchId,
+  });
+
+  const { data: windowData } = useQuery({
+    queryKey: ['window', matchId, debouncedMinute, team],
+    queryFn: () => getWindow(matchId, debouncedMinute, team),
+    enabled: !!matchId && !!team && timeline.length > 0,
+  });
+
+  const cusumMinutes = useMemo(
+    () => timeline.filter((t) => t.cusum_flag).map((t) => t.minute),
+    [timeline]
+  );
 
   const currentRisk = useMemo(() => {
-    return timeline[currentMinute]?.probability || 0;
-  }, [currentMinute]);
+    const point = timeline.find((t) => t.minute === currentMinute);
+    return point?.probability ?? timeline[currentMinute]?.probability ?? 0;
+  }, [timeline, currentMinute]);
+
+  const riskDrivers = useMemo(() => {
+    if (!windowData) return [];
+    const drivers = [windowData.driver_1, windowData.driver_2, windowData.driver_3].filter(Boolean);
+    const colors = ['#EF4444', '#F59E0B', '#EAB308'];
+    return drivers.map((key, i) => ({
+      name: formatFeatureName(key),
+      value: getFeatureValue(windowData, key),
+      color: colors[i] ?? '#94a3b8',
+    }));
+  }, [windowData]);
+
+  const maxMinute = timeline.length > 0 ? Math.max(95, ...timeline.map((t) => t.minute)) : 95;
 
   const traces: any[] = [
     {
-      x: timeline.map(t => t.minute),
-      y: timeline.map(t => t.probability * 100),
+      x: timeline.map((t) => t.minute),
+      y: timeline.map((t) => t.probability * 100),
       type: 'scatter',
       mode: 'lines',
       name: 'Collapse Risk %',
@@ -53,7 +93,6 @@ export function WarRoom() {
       hoverinfo: 'y+x',
     },
     {
-      // Cursor line
       x: [currentMinute, currentMinute],
       y: [0, 100],
       type: 'scatter',
@@ -61,50 +100,68 @@ export function WarRoom() {
       name: 'Current Time',
       line: { color: '#E2E8F0', width: 2, dash: 'solid' },
       hoverinfo: 'none',
-      showlegend: false
-    }
+      showlegend: false,
+    },
   ];
 
   const layout = {
     paper_bgcolor: 'rgba(0,0,0,0)',
     plot_bgcolor: 'rgba(0,0,0,0)',
     font: { color: '#E2E8F0', family: 'Inter' },
-    xaxis: { 
-      title: 'Match Minute', 
-      range: [0, 95], 
-      gridcolor: '#334155', 
+    xaxis: {
+      title: 'Match Minute',
+      range: [0, maxMinute],
+      gridcolor: '#334155',
       zeroline: false,
       tickfont: { color: '#94a3b8' },
-      fixedrange: true
+      fixedrange: true,
     },
-    yaxis: { 
-      title: 'Collapse Risk %', 
-      range: [0, 100], 
+    yaxis: {
+      title: 'Collapse Risk %',
+      range: [0, 100],
       gridcolor: '#334155',
       tickfont: { color: '#94a3b8' },
-      fixedrange: true
+      fixedrange: true,
     },
     shapes: [
-      ...goals.map(g => ({
-        type: 'line', x0: g.minute, x1: g.minute, y0: 0, y1: 100,
-        line: { color: '#EF4444', width: 2 }
+      ...goals.map((g) => ({
+        type: 'line',
+        x0: g.minute,
+        x1: g.minute,
+        y0: 0,
+        y1: 100,
+        line: { color: '#EF4444', width: 2 },
       })),
-      { type: 'rect', x0: 0, x1: 95, y0: 65, y1: 100,
-        fillcolor: 'rgba(239,68,68,0.08)', line: { width: 0 } },
-      ...cusumMinutes.map(m => ({
-        type: 'line', x0: m, x1: m, y0: 0, y1: 100,
-        line: { color: '#10B981', width: 1.5, dash: 'dot' }
-      }))
+      {
+        type: 'rect',
+        x0: 0,
+        x1: maxMinute,
+        y0: 65,
+        y1: 100,
+        fillcolor: 'rgba(239,68,68,0.08)',
+        line: { width: 0 },
+      },
+      ...cusumMinutes.map((m) => ({
+        type: 'line',
+        x0: m,
+        x1: m,
+        y0: 0,
+        y1: 100,
+        line: { color: '#10B981', width: 1.5, dash: 'dot' },
+      })),
     ],
-    annotations: goals.map(g => ({
-      x: g.minute, y: 97, text: '⚽',
-      showarrow: false, font: { size: 14 }
+    annotations: goals.map((g) => ({
+      x: g.minute,
+      y: 97,
+      text: '⚽',
+      showarrow: false,
+      font: { size: 14 },
     })),
     showlegend: true,
     legend: { bgcolor: 'rgba(30, 41, 59, 0.8)', bordercolor: '#334155', font: { color: '#e2e8f0' } },
     margin: { t: 20, b: 40, l: 50, r: 20 },
     autosize: true,
-    hovermode: 'x unified'
+    hovermode: 'x unified' as const,
   };
 
   return (
@@ -113,11 +170,17 @@ export function WarRoom() {
       <header className="h-16 shrink-0 bg-collapse-surface border-b border-collapse-border px-6 flex items-center justify-between">
         <div className="flex items-center gap-6">
           <div>
-            <h1 className="text-xl font-bold font-sans tracking-tight">FRA vs ARG</h1>
-            <p className="text-xs text-collapse-muted font-mono uppercase tracking-wider">World Cup Final 2022</p>
+            <h1 className="text-xl font-bold font-sans tracking-tight">
+              {match ? `${match.home_team} vs ${match.away_team}` : 'War Room'}
+            </h1>
+            <p className="text-xs text-collapse-muted font-mono uppercase tracking-wider">
+              {match?.competition ?? ''} {match?.season ?? ''}
+            </p>
           </div>
           <div className="flex items-center gap-4 bg-collapse-bg/50 px-4 py-2 rounded-lg border border-collapse-border">
-            <span className="text-2xl font-bold font-mono text-collapse-safe">3 - 3</span>
+            <span className="text-2xl font-bold font-mono text-collapse-safe">
+              {match ? `${match.home_score} – ${match.away_score}` : '–'}
+            </span>
             <div className="h-4 w-[1px] bg-collapse-border"></div>
             <div className="flex items-center gap-2 text-collapse-warn animate-pulse">
               <Timer className="w-4 h-4" />
@@ -138,27 +201,37 @@ export function WarRoom() {
         {/* Center Panel (Chart) */}
         <div className="flex-1 flex flex-col p-6 min-w-0">
           <div className="flex-1 bg-collapse-surface border border-collapse-border rounded-xl p-4 relative overflow-hidden shadow-lg">
-            <Plot
-              data={traces}
-              layout={layout as any}
-              useResizeHandler={true}
-              style={{ width: "100%", height: "100%" }}
-              config={{ displayModeBar: false, responsive: true }}
-            />
+            {timeline.length === 0 ? (
+              <div className="flex-1 flex items-center justify-center h-full min-h-[300px]">
+                <div className="space-y-3 w-full px-8">
+                  <Skeleton className="h-4 w-full bg-collapse-surface" />
+                  <Skeleton className="h-40 w-full bg-collapse-surface" />
+                  <Skeleton className="h-4 w-3/4 bg-collapse-surface" />
+                </div>
+              </div>
+            ) : (
+              <Plot
+                data={traces}
+                layout={layout}
+                useResizeHandler={true}
+                style={{ width: '100%', height: '100%' }}
+                config={{ displayModeBar: false, responsive: true }}
+              />
+            )}
           </div>
-          
+
           {/* Scrubber */}
           <div className="h-20 mt-4 bg-collapse-surface border border-collapse-border rounded-xl p-4 flex items-center gap-4 shadow-lg">
             <span className="font-mono text-sm text-collapse-muted w-12 text-right">0'</span>
-            <input 
-              type="range" 
-              min="0" 
-              max="95" 
+            <input
+              type="range"
+              min="0"
+              max={maxMinute}
               value={currentMinute}
-              onChange={(e) => setCurrentMinute(parseInt(e.target.value))}
+              onChange={(e) => setCurrentMinute(parseInt(e.target.value, 10))}
               className="flex-1 h-2 bg-collapse-bg rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:bg-collapse-accent [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:shadow-lg hover:[&::-webkit-slider-thumb]:scale-110 transition-all"
             />
-            <span className="font-mono text-sm text-collapse-muted w-12">95'+</span>
+            <span className="font-mono text-sm text-collapse-muted w-12">{maxMinute}'+</span>
             <div className="px-3 py-1 bg-collapse-accent text-white font-mono text-sm rounded min-w-[3rem] text-center">
               {currentMinute}'
             </div>

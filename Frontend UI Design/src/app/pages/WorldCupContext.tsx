@@ -1,24 +1,28 @@
 import { useState } from 'react';
-import { CloudRain, ThermometerSun, Wind, Droplets, MapPin, CalendarDays, TrendingUp } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import { ThermometerSun, Droplets, MapPin, CalendarDays, TrendingUp } from 'lucide-react';
+import { getWC2026Venues, getFixtureComparison } from '../../lib/api';
+import type { WC2026Venue } from '../../lib/types';
 
-const venues = [
-  { id: 1, city: 'Mexico City', country: 'Mexico', lat: 70, lng: 30, elevation: '2,240m', temp: '26°C', humidity: '45%', stress: 'High', color: '#EF4444' },
-  { id: 2, city: 'New York/NJ', country: 'USA', lat: 38, lng: 75, elevation: '10m', temp: '32°C', humidity: '85%', stress: 'Medium', color: '#F59E0B' },
-  { id: 3, city: 'Los Angeles', country: 'USA', lat: 45, lng: 15, elevation: '70m', temp: '29°C', humidity: '55%', stress: 'Low', color: '#10B981' },
-  { id: 4, city: 'Toronto', country: 'Canada', lat: 35, lng: 70, elevation: '76m', temp: '25°C', humidity: '60%', stress: 'Low', color: '#10B981' },
-  { id: 5, city: 'Miami', country: 'USA', lat: 60, lng: 78, elevation: '2m', temp: '34°C', humidity: '92%', stress: 'Critical', color: '#EF4444' },
-  { id: 6, city: 'Dallas', country: 'USA', lat: 55, lng: 45, elevation: '130m', temp: '36°C', humidity: '40%', stress: 'Medium', color: '#F59E0B' },
-  { id: 7, city: 'Atlanta', country: 'USA', lat: 50, lng: 65, elevation: '300m', temp: '31°C', humidity: '75%', stress: 'Medium', color: '#F59E0B' },
-  { id: 8, city: 'Kansas City', country: 'USA', lat: 40, lng: 50, elevation: '270m', temp: '33°C', humidity: '65%', stress: 'Medium', color: '#F59E0B' },
-  { id: 9, city: 'Houston', country: 'USA', lat: 60, lng: 48, elevation: '15m', temp: '35°C', humidity: '88%', stress: 'High', color: '#EF4444' },
-  { id: 10, city: 'San Francisco', country: 'USA', lat: 42, lng: 12, elevation: '20m', temp: '22°C', humidity: '50%', stress: 'Low', color: '#10B981' },
-  { id: 11, city: 'Seattle', country: 'USA', lat: 25, lng: 15, elevation: '5m', temp: '24°C', humidity: '55%', stress: 'Low', color: '#10B981' },
-  { id: 12, city: 'Vancouver', country: 'Canada', lat: 20, lng: 12, elevation: '10m', temp: '23°C', humidity: '58%', stress: 'Low', color: '#10B981' },
-  { id: 13, city: 'Guadalajara', country: 'Mexico', lat: 72, lng: 25, elevation: '1,566m', temp: '28°C', humidity: '40%', stress: 'Medium', color: '#F59E0B' },
-  { id: 14, city: 'Monterrey', country: 'Mexico', lat: 65, lng: 35, elevation: '540m', temp: '35°C', humidity: '35%', stress: 'High', color: '#EF4444' },
-  { id: 15, city: 'Philadelphia', country: 'USA', lat: 37, lng: 76, elevation: '12m', temp: '30°C', humidity: '70%', stress: 'Medium', color: '#F59E0B' },
-  { id: 16, city: 'Boston', country: 'USA', lat: 35, lng: 80, elevation: '45m', temp: '27°C', humidity: '65%', stress: 'Low', color: '#10B981' },
-];
+function stressColor(factor: number): string {
+  if (factor >= 1.15) return '#EF4444';
+  if (factor >= 1.05) return '#F59E0B';
+  return '#10B981';
+}
+
+function stressLabel(factor: number): string {
+  if (factor >= 1.2) return 'Critical';
+  if (factor >= 1.15) return 'High';
+  if (factor >= 1.05) return 'Medium';
+  return 'Low';
+}
+
+function venueToImagePosition(lat: number, lon: number): { top: string; left: string } {
+  const absLon = Math.abs(lon);
+  const top = ((55 - lat) / 35) * 60 + 20;
+  const left = ((absLon - 65) / 65) * 80 + 10;
+  return { top: `${Math.max(0, Math.min(100, top))}%`, left: `${Math.max(0, Math.min(100, left))}%` };
+}
 
 const fixtures = [
   { id: 1, teamA: 'Brazil', teamB: 'France', date: 'June 18, 2026' },
@@ -28,9 +32,37 @@ const fixtures = [
 ];
 
 export function WorldCupContext() {
+  const { data: venues = [], isLoading: venuesLoading } = useQuery({
+    queryKey: ['wc2026-venues'],
+    queryFn: getWC2026Venues,
+  });
+
   const [selectedFixture, setSelectedFixture] = useState(fixtures[0]);
-  const [comparisonCityA, setComparisonCityA] = useState(venues[0]); // Mexico City
-  const [comparisonCityB, setComparisonCityB] = useState(venues[4]); // Miami
+  const [comparisonCityA, setComparisonCityA] = useState<WC2026Venue | null>(null);
+  const [comparisonCityB, setComparisonCityB] = useState<WC2026Venue | null>(null);
+
+  const baselineCity = comparisonCityA ?? venues[0] ?? null;
+  const alternativeCity = comparisonCityB ?? venues[4] ?? venues[0] ?? null;
+
+  const { data: comparisonA } = useQuery({
+    queryKey: ['fixture-comparison', selectedFixture.teamA, selectedFixture.teamB, baselineCity?.city],
+    queryFn: () =>
+      getFixtureComparison(selectedFixture.teamA, selectedFixture.teamB, baselineCity!.city),
+    enabled: !!baselineCity?.city,
+  });
+
+  const { data: comparisonB } = useQuery({
+    queryKey: ['fixture-comparison', selectedFixture.teamA, selectedFixture.teamB, alternativeCity?.city],
+    queryFn: () =>
+      getFixtureComparison(selectedFixture.teamA, selectedFixture.teamB, alternativeCity!.city),
+    enabled: !!alternativeCity?.city,
+  });
+
+  const probDelta =
+    comparisonA && comparisonB
+      ? ((comparisonB.adjusted_probability - comparisonA.adjusted_probability) * 100).toFixed(0)
+      : null;
+  const deltaNum = probDelta ? parseInt(probDelta, 10) : 0;
 
   return (
     <div className="h-full flex flex-col bg-collapse-bg text-collapse-text overflow-hidden relative">
@@ -43,22 +75,26 @@ export function WorldCupContext() {
         
         {/* Custom Marker Overlay */}
         <div className="absolute inset-0 pointer-events-none">
-          {venues.map((venue) => (
-             <div 
-               key={venue.id}
-               className="absolute w-3 h-3 rounded-full border-2 border-white shadow-lg cursor-pointer transform hover:scale-150 transition-transform pointer-events-auto"
-               style={{ 
-                 top: `${venue.lat}%`, 
-                 left: `${venue.lng}%`, 
-                 backgroundColor: venue.color,
-                 boxShadow: `0 0 10px ${venue.color}`
-               }}
-               onClick={() => setComparisonCityA(venue)}
-               title={`${venue.city} (${venue.stress})`}
-             >
-               <span className="sr-only">{venue.city}</span>
-             </div>
-          ))}
+          {venues.map((venue) => {
+            const pos = venueToImagePosition(venue.lat, venue.lon);
+            const color = stressColor(venue.stress_factor);
+            return (
+              <div
+                key={venue.venue_id}
+                className="absolute w-3 h-3 rounded-full border-2 border-white shadow-lg cursor-pointer transform hover:scale-150 transition-transform pointer-events-auto"
+                style={{
+                  top: pos.top,
+                  left: pos.left,
+                  backgroundColor: color,
+                  boxShadow: `0 0 10px ${color}`,
+                }}
+                onClick={() => setComparisonCityA(venue)}
+                title={`${venue.city} (${stressLabel(venue.stress_factor)})`}
+              >
+                <span className="sr-only">{venue.city}</span>
+              </div>
+            );
+          })}
         </div>
       </div>
 
@@ -109,36 +145,41 @@ export function WorldCupContext() {
             </h3>
             
             <div className="flex items-center gap-4 flex-1">
-              {/* City A Card */}
-              <CityCard city={comparisonCityA} label="Baseline Venue" />
+              <CityCard venue={baselineCity} label="Baseline Venue" />
 
               <div className="text-collapse-muted font-bold text-lg">VS</div>
 
-              {/* City B Card (Dropdown for selection) */}
               <div className="flex-1 h-full flex flex-col">
-                <select 
+                <select
                   className="bg-collapse-bg border border-collapse-border rounded-lg p-2 text-sm text-collapse-text mb-2 focus:border-collapse-accent focus:outline-none"
-                  value={comparisonCityB.id}
-                  onChange={(e) => setComparisonCityB(venues.find(v => v.id === parseInt(e.target.value)) || venues[0])}
+                  value={alternativeCity?.venue_id ?? ''}
+                  onChange={(e) => {
+                    const v = venues.find((x) => x.venue_id === parseInt(e.target.value, 10));
+                    if (v) setComparisonCityB(v);
+                  }}
                 >
-                  {venues.map(v => <option key={v.id} value={v.id}>{v.city}</option>)}
+                  {venues.map((v) => (
+                    <option key={v.venue_id} value={v.venue_id}>
+                      {v.city}
+                    </option>
+                  ))}
                 </select>
-                <CityCard city={comparisonCityB} label="Alternative" />
+                <CityCard venue={alternativeCity} label="Alternative" />
               </div>
             </div>
 
             <div className="mt-4 bg-collapse-bg border border-collapse-border rounded-lg p-3 flex items-center justify-between">
-               <span className="text-sm text-collapse-muted font-medium">Predicted Collapse Probability Shift</span>
-               <div className="flex items-center gap-2">
-                 <span className="text-xs text-collapse-muted">Environmental Delta Only</span>
-                 <span className={`text-xl font-bold font-mono ${
-                   (comparisonCityB.stress === 'High' && comparisonCityA.stress === 'Low') ? 'text-collapse-risk' :
-                   (comparisonCityB.stress === 'Low' && comparisonCityA.stress === 'High') ? 'text-collapse-safe' : 'text-collapse-warn'
-                 }`}>
-                   {(comparisonCityB.stress === 'High' && comparisonCityA.stress === 'Low') ? '+18%' :
-                    (comparisonCityB.stress === 'Low' && comparisonCityA.stress === 'High') ? '-14%' : '+2%'}
-                 </span>
-               </div>
+              <span className="text-sm text-collapse-muted font-medium">Predicted Collapse Probability Shift</span>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-collapse-muted">Environmental Delta Only</span>
+                <span
+                  className={`text-xl font-bold font-mono ${
+                    deltaNum > 0 ? 'text-collapse-risk' : deltaNum < 0 ? 'text-collapse-safe' : 'text-collapse-warn'
+                  }`}
+                >
+                  {probDelta != null ? (deltaNum > 0 ? `+${probDelta}%` : `${probDelta}%`) : '—'}
+                </span>
+              </div>
             </div>
           </div>
         </div>
@@ -147,26 +188,28 @@ export function WorldCupContext() {
   );
 }
 
-function CityCard({ city, label }: { city: any, label: string }) {
+function CityCard({ venue, label }: { venue: WC2026Venue | null; label: string }) {
+  if (!venue) return <div className="flex-1 bg-collapse-bg border border-collapse-border rounded-lg p-4 flex items-center justify-center text-collapse-muted text-sm">{label} — loading…</div>;
+  const color = stressColor(venue.stress_factor);
+  const barClass = color === '#EF4444' ? 'bg-collapse-risk' : color === '#F59E0B' ? 'bg-collapse-warn' : 'bg-collapse-safe';
   return (
     <div className="flex-1 bg-collapse-bg border border-collapse-border rounded-lg p-4 h-full relative overflow-hidden group hover:border-collapse-muted transition-colors">
-      <div className={`absolute top-0 left-0 w-1 h-full ${city.color === '#EF4444' ? 'bg-collapse-risk' : city.color === '#F59E0B' ? 'bg-collapse-warn' : 'bg-collapse-safe'}`} />
+      <div className={`absolute top-0 left-0 w-1 h-full ${barClass}`} />
       <div className="pl-3">
         <span className="text-xs text-collapse-muted uppercase block mb-1">{label}</span>
-        <h4 className="font-bold text-lg leading-tight mb-3">{city.city}</h4>
-        
+        <h4 className="font-bold text-lg leading-tight mb-3">{venue.city}</h4>
         <div className="space-y-2 text-sm">
           <div className="flex justify-between border-b border-collapse-border pb-1">
             <span className="text-collapse-muted flex items-center gap-2"><ThermometerSun size={12} /> Temp</span>
-            <span className="font-mono">{city.temp}</span>
+            <span className="font-mono">{venue.june_temp_f}°F</span>
           </div>
           <div className="flex justify-between border-b border-collapse-border pb-1">
             <span className="text-collapse-muted flex items-center gap-2"><Droplets size={12} /> Humidity</span>
-            <span className="font-mono">{city.humidity}</span>
+            <span className="font-mono">{venue.humidity_pct}%</span>
           </div>
           <div className="flex justify-between">
             <span className="text-collapse-muted flex items-center gap-2"><MapPin size={12} /> Elevation</span>
-            <span className="font-mono">{city.elevation}</span>
+            <span className="font-mono">{venue.elevation_ft} ft</span>
           </div>
         </div>
       </div>

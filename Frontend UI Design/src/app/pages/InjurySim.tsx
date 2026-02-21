@@ -1,54 +1,77 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useMemo } from 'react';
+import { useQuery, useMutation } from '@tanstack/react-query';
 import * as d3 from 'd3';
 import { motion, AnimatePresence } from 'motion/react';
-import { Activity, Thermometer, UserMinus, ShieldAlert, ArrowRight, Zap } from 'lucide-react';
+import { Activity, UserMinus, ShieldAlert, ArrowRight, Zap } from 'lucide-react';
+import { getPassNetwork, simulatePlayerRemoval } from '../../lib/api';
+import type { PlayerRemovalResult } from '../../lib/types';
+import { useMatch } from '../context/MatchContext';
+import { Skeleton } from '../components/ui/skeleton';
 
 interface Player {
   id: string;
   name: string;
   position: string;
-  fatigue: number; // 0-100
-  influence: number; // 0-100
+  fatigue: number;
+  influence: number;
   minutesPlayed: number;
 }
 
-const players: Player[] = [
-  { id: 'p1', name: 'Griezmann', position: 'CAM', fatigue: 88, influence: 92, minutesPlayed: 85 },
-  { id: 'p2', name: 'Mbappé', position: 'LW', fatigue: 75, influence: 98, minutesPlayed: 85 },
-  { id: 'p3', name: 'Rabiot', position: 'CM', fatigue: 92, influence: 78, minutesPlayed: 85 },
-  { id: 'p4', name: 'Varane', position: 'CB', fatigue: 95, influence: 85, minutesPlayed: 85 },
-  { id: 'p5', name: 'Tchouaméni', position: 'CDM', fatigue: 82, influence: 75, minutesPlayed: 85 },
-  { id: 'p6', name: 'Koundé', position: 'RB', fatigue: 68, influence: 65, minutesPlayed: 85 },
-];
+const DEMO_MINUTE = 75;
 
 export function InjurySim() {
+  const { matchId, team } = useMatch();
   const svgRef = useRef<SVGSVGElement>(null);
   const [selectedPlayer, setSelectedPlayer] = useState<Player | null>(null);
-  const [simulationRunning, setSimulationRunning] = useState(false);
+  const [removalResult, setRemovalResult] = useState<PlayerRemovalResult | null>(null);
+
+  const { data: network, isLoading: networkLoading } = useQuery({
+    queryKey: ['network', matchId, DEMO_MINUTE, team],
+    queryFn: () => getPassNetwork(matchId, DEMO_MINUTE, team),
+    enabled: !!matchId && !!team,
+  });
+
+  const removeMutation = useMutation({
+    mutationFn: (player: string) =>
+      simulatePlayerRemoval(matchId, team, player, DEMO_MINUTE),
+    onSuccess: (data) => setRemovalResult(data),
+  });
+
+  const players: Player[] = useMemo(
+    () =>
+      (network?.nodes ?? []).map((node) => ({
+        id: node.player.replace(/\s+/g, '_'),
+        name: node.player,
+        position: '',
+        fatigue: Math.round(node.fatigue_score * 100),
+        influence: Math.round(node.influence_score * 100),
+        minutesPlayed: node.minutes_played,
+      })),
+    [network]
+  );
+
+  const links = useMemo(
+    () =>
+      (network?.edges ?? []).map((e) => ({
+        source: e.from_player.replace(/\s+/g, '_'),
+        target: e.to_player.replace(/\s+/g, '_'),
+        value: e.pass_count,
+      })),
+    [network]
+  );
 
   useEffect(() => {
-    if (!svgRef.current) return;
+    if (!svgRef.current || players.length === 0) return;
 
     const width = svgRef.current.clientWidth;
     const height = svgRef.current.clientHeight;
 
     const svg = d3.select(svgRef.current);
-    svg.selectAll("*").remove();
+    svg.selectAll('*').remove();
 
-    // Mock graph data based on players
-    const nodes = players.map(p => ({ ...p, x: width / 2, y: height / 2 }));
-    const links = [
-      { source: 'p1', target: 'p2', value: 15 },
-      { source: 'p1', target: 'p3', value: 12 },
-      { source: 'p3', target: 'p4', value: 8 },
-      { source: 'p3', target: 'p5', value: 10 },
-      { source: 'p4', target: 'p5', value: 5 },
-      { source: 'p5', target: 'p6', value: 7 },
-      { source: 'p2', target: 'p1', value: 10 },
-      { source: 'p6', target: 'p1', value: 4 },
-    ];
+    const nodes = players.map((p) => ({ ...p, x: width / 2, y: height / 2 }));
 
-    const simulation = d3.forceSimulation(nodes as any)
+    const simulation = d3.forceSimulation(nodes as d3.SimulationNodeDatum & Player & { x?: number; y?: number }[])
       .force('link', d3.forceLink(links).id((d: any) => d.id).distance(120))
       .force('charge', d3.forceManyBody().strength(-400))
       .force('center', d3.forceCenter(width / 2, height / 2))
@@ -86,8 +109,10 @@ export function InjurySim() {
       .style('cursor', 'pointer')
       .on('click', (event, d) => {
         event.stopPropagation();
-        setSelectedPlayer(d as any);
-        setSimulationRunning(false); // Reset simulation state on new selection
+        const p = d as unknown as Player;
+        setSelectedPlayer(p);
+        setRemovalResult(null);
+        removeMutation.mutate(p.name);
       });
 
     // Player Labels
@@ -132,7 +157,7 @@ export function InjurySim() {
     return () => {
       simulation.stop();
     };
-  }, []);
+  }, [players, links]);
 
   return (
     <div className="h-full bg-collapse-bg text-collapse-text overflow-hidden flex">
@@ -145,9 +170,13 @@ export function InjurySim() {
 
         <div className="space-y-4 overflow-y-auto pr-2 custom-scrollbar flex-1">
           {players.map((player) => (
-            <div 
-              key={player.id} 
-              onClick={() => { setSelectedPlayer(player); setSimulationRunning(false); }}
+            <div
+              key={player.id}
+              onClick={() => {
+                setSelectedPlayer(player);
+                setRemovalResult(null);
+                removeMutation.mutate(player.name);
+              }}
               className={`p-3 rounded-lg border transition-all cursor-pointer ${selectedPlayer?.id === player.id ? 'bg-collapse-accent/10 border-collapse-accent' : 'bg-collapse-bg border-collapse-border hover:border-collapse-muted'}`}
             >
               <div className="flex justify-between items-center mb-2">
@@ -176,7 +205,16 @@ export function InjurySim() {
         <div className="absolute top-4 left-4 z-10 bg-collapse-surface/80 backdrop-blur p-2 rounded border border-collapse-border text-xs text-collapse-muted pointer-events-none">
           Force-Directed Pass Network • Node Size = Influence • Color = Fatigue
         </div>
-        <svg ref={svgRef} className="w-full h-full cursor-grab active:cursor-grabbing" />
+        {networkLoading || players.length === 0 ? (
+          <div className="w-full h-full flex items-center justify-center p-8">
+            <div className="space-y-3 w-full max-w-md">
+              <Skeleton className="h-4 w-full bg-collapse-surface" />
+              <Skeleton className="h-64 w-full bg-collapse-surface" />
+            </div>
+          </div>
+        ) : (
+          <svg ref={svgRef} className="w-full h-full cursor-grab active:cursor-grabbing" />
+        )}
       </div>
 
       {/* Right Sidebar: Impact Analysis (Conditional) */}
@@ -222,16 +260,10 @@ export function InjurySim() {
                  Simulate the immediate impact on team structure if {selectedPlayer.name} is removed from play.
                </p>
 
-               {!simulationRunning ? (
-                 <button 
-                   onClick={() => setSimulationRunning(true)}
-                   className="w-full py-3 bg-collapse-risk text-white font-bold rounded-lg shadow-lg shadow-collapse-risk/20 hover:bg-collapse-risk/90 transition-all flex items-center justify-center gap-2"
-                 >
-                   <UserMinus className="w-5 h-5" />
-                   Remove Player
-                 </button>
-               ) : (
-                 <motion.div 
+               {!removalResult && !removeMutation.isPending ? (
+                 <p className="text-sm text-collapse-muted">Click a player above or in the graph to run the simulation.</p>
+               ) : removalResult ? (
+                 <motion.div
                    initial={{ opacity: 0, scale: 0.95 }}
                    animate={{ opacity: 1, scale: 1 }}
                    className="space-y-6"
@@ -241,61 +273,60 @@ export function InjurySim() {
                        <span className="text-sm font-medium">Collapse Probability</span>
                        <span className="text-xs text-collapse-muted">Before vs After</span>
                      </div>
-                     
                      <div className="flex items-center justify-between mb-2">
                        <div className="text-center">
-                         <span className="block text-2xl font-bold text-collapse-text">12%</span>
+                         <span className="block text-2xl font-bold text-collapse-text">
+                           {(removalResult.original_probability * 100).toFixed(1)}%
+                         </span>
                          <span className="text-xs text-collapse-muted">Current</span>
                        </div>
                        <ArrowRight className="w-5 h-5 text-collapse-muted" />
                        <div className="text-center">
-                         <motion.span 
+                         <motion.span
                            initial={{ opacity: 0, y: 5 }}
                            animate={{ opacity: 1, y: 0 }}
-                           className="block text-3xl font-bold text-collapse-risk"
+                           className={`block text-3xl font-bold ${removalResult.delta > 0 ? 'text-collapse-risk' : 'text-collapse-safe'}`}
                          >
-                           {12 + Math.round(selectedPlayer.influence / 4)}%
+                           {(removalResult.new_probability * 100).toFixed(1)}%
                          </motion.span>
-                         <span className="text-xs text-collapse-risk font-bold">Projected</span>
+                         <span className="text-xs font-bold">
+                           {removalResult.delta > 0 ? '+' : ''}{(removalResult.delta * 100).toFixed(1)}%
+                         </span>
                        </div>
                      </div>
-                     
-                     {/* Gauge Bar */}
                      <div className="relative h-2 bg-collapse-surface rounded-full overflow-hidden mt-2">
-                        <div className="absolute top-0 bottom-0 left-0 w-[12%] bg-collapse-safe z-10" />
-                        <motion.div 
-                          className="absolute top-0 bottom-0 left-0 bg-collapse-risk/50 z-0"
-                          initial={{ width: "12%" }}
-                          animate={{ width: `${12 + Math.round(selectedPlayer.influence / 4)}%` }}
-                          transition={{ duration: 1, delay: 0.2 }}
-                        />
+                       <div
+                         className="absolute top-0 bottom-0 left-0 bg-collapse-safe z-10"
+                         style={{ width: `${removalResult.original_probability * 100}%` }}
+                       />
+                       <motion.div
+                         className="absolute top-0 bottom-0 left-0 bg-collapse-risk/50 z-0"
+                         initial={{ width: `${removalResult.original_probability * 100}%` }}
+                         animate={{ width: `${removalResult.new_probability * 100}%` }}
+                         transition={{ duration: 1, delay: 0.2 }}
+                       />
                      </div>
                    </div>
-
                    <div className="space-y-3">
-                      <div className="flex items-start gap-3 text-sm">
-                        <ShieldAlert className="w-5 h-5 text-collapse-risk shrink-0 mt-0.5" />
-                        <div>
-                          <span className="font-bold text-collapse-risk block">Structural Integrity Critical</span>
-                          <span className="text-collapse-muted">Loss of {selectedPlayer.name} creates significant gaps in sector 4.</span>
-                        </div>
-                      </div>
-                      <div className="flex items-start gap-3 text-sm">
-                        <Activity className="w-5 h-5 text-collapse-warn shrink-0 mt-0.5" />
-                        <div>
-                          <span className="font-bold text-collapse-warn block">Momentum Shift</span>
-                          <span className="text-collapse-muted">Expected possession drops by 14%.</span>
-                        </div>
-                      </div>
+                     <div className="flex items-start gap-3 text-sm">
+                       <ShieldAlert className="w-5 h-5 text-collapse-risk shrink-0 mt-0.5" />
+                       <div>
+                         <span className="font-bold text-collapse-risk block">Structural Impact</span>
+                         <span className="text-collapse-muted">
+                           Loss of {removalResult.removed_player} changes collapse probability by {removalResult.delta > 0 ? '+' : ''}{(removalResult.delta * 100).toFixed(1)}%.
+                         </span>
+                       </div>
+                     </div>
                    </div>
-
-                   <button 
-                     onClick={() => setSimulationRunning(false)}
+                   <button
+                     onClick={() => setRemovalResult(null)}
                      className="w-full py-2 bg-collapse-surface border border-collapse-border text-collapse-text font-medium rounded-lg hover:bg-collapse-border transition-colors text-sm"
                    >
                      Reset Simulation
                    </button>
                  </motion.div>
+               ) : (
+                 <div className="text-sm text-collapse-muted">Running simulation…</div>
                )}
             </div>
           </motion.div>

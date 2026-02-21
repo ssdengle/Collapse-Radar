@@ -1,29 +1,96 @@
-import { useState } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import { ArrowUpRight, TrendingDown, Users, Activity, PlayCircle, Info } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { motion } from 'motion/react';
+import { ArrowUpRight, Users, Activity, PlayCircle, Info, Sparkles } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
+import { getTimeline, getGoals, getWindow, getCounterfactual, getCoachSuggestions } from '../../lib/api';
+import { useMatch } from '../context/MatchContext';
+import { Skeleton } from '../components/ui/skeleton';
+
+const CURRENT_MINUTE = 75;
 
 export function CoachMode() {
+  const { matchId, team } = useMatch();
   const [revealed, setRevealed] = useState(false);
-  const goalMinute = 67;
+  const [aiSuggestions, setAiSuggestions] = useState<string | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
 
-  // Mock data for the counterfactual chart
-  const data = Array.from({ length: 80 }, (_, i) => {
-    let actual = 0.2 + (i / 100);
-    if (i > 50) actual += (i - 50) * 0.02; // Risk spiking
-    
-    // Projected "What If" scenario: intervention at min 55
-    let projected = actual;
-    if (i > 55) {
-      projected = Math.max(0.1, actual - ((i - 55) * 0.03));
+  // Reset "What If?" state when user switches match or team so data reflects current selection
+  useEffect(() => {
+    setRevealed(false);
+    setAiSuggestions(null);
+    setAiError(null);
+  }, [matchId, team]);
+
+  const { data: timeline = [] } = useQuery({
+    queryKey: ['timeline', matchId, team],
+    queryFn: () => getTimeline(matchId, team),
+    enabled: !!matchId && !!team,
+  });
+
+  const { data: goals = [] } = useQuery({
+    queryKey: ['goals', matchId],
+    queryFn: () => getGoals(matchId),
+    enabled: !!matchId,
+  });
+
+  const { data: windowData } = useQuery({
+    queryKey: ['window', matchId, CURRENT_MINUTE, team],
+    queryFn: () => getWindow(matchId, CURRENT_MINUTE, team),
+    enabled: !!matchId && !!team,
+  });
+
+  const { data: counterfactual = [], refetch: fetchCounterfactual } = useQuery({
+    queryKey: ['counterfactual', matchId, CURRENT_MINUTE, team],
+    queryFn: () => getCounterfactual(matchId, CURRENT_MINUTE, team),
+    enabled: false,
+  });
+
+  const handleWhatIf = async () => {
+    await fetchCounterfactual();
+    setRevealed(true);
+  };
+
+  const handleGetAiSuggestions = async () => {
+    setAiLoading(true);
+    setAiError(null);
+    setAiSuggestions(null);
+    try {
+      const { suggestions } = await getCoachSuggestions({
+        team,
+        minute: CURRENT_MINUTE,
+        risk_percent: windowData ? Math.round(windowData.probability * 100) : 72,
+        headline: windowData?.headline ?? 'Defensive structure at risk',
+        rationale: windowData?.rationale?.filter(Boolean) ?? [],
+      });
+      setAiSuggestions(suggestions);
+    } catch (e) {
+      setAiError(e instanceof Error ? e.message : 'Failed to load suggestions');
+    } finally {
+      setAiLoading(false);
     }
+  };
 
+  const chartData = timeline.map((t) => {
+    const cf = counterfactual.find((c) => c.projected_minute === t.minute);
     return {
-      minute: i,
-      actual: Math.min(0.95, actual),
-      projected: Math.min(0.95, projected)
+      minute: t.minute,
+      actual: t.probability,
+      projected: cf?.projected_prob ?? null,
     };
   });
+
+  const goalMinute = goals[0]?.minute ?? 89;
+  const riskPct = windowData ? Math.round(windowData.probability * 100) : 72;
+  const headline = windowData?.headline ?? 'Defensive Structure Compromised';
+  const rationale = windowData?.rationale?.filter(Boolean) ?? [
+    'Increase defensive compactness',
+    'Lower press intensity',
+    'Reduce central build-up',
+  ];
+  const riskDelta = windowData ? Math.abs(Math.round(windowData.risk_delta * 100)) : 45;
+  const interventionMinute = CURRENT_MINUTE;
 
   const greenPathVariants = {
     hidden: { pathLength: 0, opacity: 0 },
@@ -45,10 +112,10 @@ export function CoachMode() {
             <span className="px-2 py-1 bg-collapse-risk/10 text-collapse-risk rounded text-xs font-bold border border-collapse-risk/20">HIGH</span>
           </div>
           <div className="flex items-baseline gap-2 mb-2">
-            <span className="text-5xl font-bold font-sans tracking-tight">72%</span>
+            <span className="text-5xl font-bold font-sans tracking-tight">{riskPct}%</span>
             <span className="text-collapse-risk flex items-center text-sm font-medium bg-collapse-risk/10 px-2 py-1 rounded">
               <ArrowUpRight className="w-4 h-4 mr-1" />
-              +14%
+              {windowData?.risk_delta != null && windowData.risk_delta > 0 ? '+' : ''}{Math.round((windowData?.risk_delta ?? 0.14) * 100)}%
             </span>
           </div>
           <p className="text-sm text-collapse-muted">Probability of conceding within 10 mins.</p>
@@ -87,16 +154,52 @@ export function CoachMode() {
              </div>
            </div>
         </div>
+
+        {/* AI Coach Suggestions (Gemini) */}
+        <div className="bg-collapse-surface border border-collapse-border rounded-xl p-6 shadow-sm">
+          <h3 className="text-collapse-muted text-sm font-medium uppercase tracking-wider mb-4 flex items-center gap-2">
+            <Sparkles className="w-4 h-4 text-amber-400" />
+            AI Coach Suggestions
+          </h3>
+          <p className="text-xs text-collapse-muted mb-4">
+            Get tailored actions based on current risk and model recommendations.
+          </p>
+          <button
+            type="button"
+            onClick={handleGetAiSuggestions}
+            disabled={aiLoading || !team}
+            className="w-full py-2.5 px-4 rounded-lg font-medium text-sm bg-amber-500/20 text-amber-400 border border-amber-500/40 hover:bg-amber-500/30 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            {aiLoading ? 'Loading…' : 'Get AI suggestions'}
+          </button>
+          {aiError && (
+            <p className="mt-3 text-sm text-red-400">{aiError}</p>
+          )}
+          {aiSuggestions && (
+            <ul className="mt-4 space-y-2 list-none">
+              {aiSuggestions
+                .split(/\n+/)
+                .map((line) => line.trim())
+                .filter(Boolean)
+                .map((line, i) => (
+                  <li key={i} className="flex items-start gap-2 text-sm text-collapse-text">
+                    <span className="text-amber-400 shrink-0 mt-0.5">•</span>
+                    <span>{line}</span>
+                  </li>
+                ))}
+            </ul>
+          )}
+        </div>
       </div>
 
       {/* Center Column: Intervention Card */}
       <div className="col-span-1 flex flex-col justify-center gap-8">
         <div className="text-center space-y-4">
           <h2 className="text-3xl font-bold font-sans tracking-tight leading-tight">
-            Defensive Structure Compromised
+            {headline}
           </h2>
           <p className="text-collapse-muted max-w-md mx-auto">
-            Our model detected a significant drop in defensive compactness starting at minute 52.
+            Our model detected a significant drop in defensive compactness starting at minute {interventionMinute}.
           </p>
         </div>
 
@@ -115,29 +218,23 @@ export function CoachMode() {
           </h3>
           
           <ul className="space-y-4 mb-8">
-            <li className="flex items-start gap-3">
-              <span className="w-6 h-6 rounded-full bg-collapse-accent/20 text-collapse-accent flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">✓</span>
-              <span className="text-collapse-text font-medium">Shift left-back to inverted role</span>
-            </li>
-            <li className="flex items-start gap-3">
-              <span className="w-6 h-6 rounded-full bg-collapse-accent/20 text-collapse-accent flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">✓</span>
-              <span className="text-collapse-text font-medium">Increase press intensity zone 14</span>
-            </li>
-            <li className="flex items-start gap-3">
-              <span className="w-6 h-6 rounded-full bg-collapse-accent/20 text-collapse-accent flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">✓</span>
-              <span className="text-collapse-text font-medium">Slow build-up tempo</span>
-            </li>
+            {rationale.slice(0, 3).map((item, i) => (
+              <li key={i} className="flex items-start gap-3">
+                <span className="w-6 h-6 rounded-full bg-collapse-accent/20 text-collapse-accent flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">✓</span>
+                <span className="text-collapse-text font-medium">{item}</span>
+              </li>
+            ))}
           </ul>
 
           <div className="flex items-center justify-between mt-8 pt-6 border-t border-collapse-border/50">
             <div className="text-sm text-collapse-muted font-medium">Potential Impact</div>
             <div className="bg-collapse-safe/20 text-collapse-safe px-3 py-1.5 rounded-lg font-bold text-sm border border-collapse-safe/30">
-              -45% Risk Delta
+              -{riskDelta}% Risk Delta
             </div>
           </div>
 
-          <button 
-            onClick={() => setRevealed(true)}
+          <button
+            onClick={handleWhatIf}
             disabled={revealed}
             className={`w-full mt-6 py-3 rounded-lg font-bold shadow-lg transition-all transform active:scale-95 ${revealed ? 'bg-collapse-border text-collapse-muted cursor-default' : 'bg-collapse-accent text-white hover:bg-collapse-accent/90 shadow-collapse-accent/25'}`}
           >
@@ -154,25 +251,37 @@ export function CoachMode() {
         </div>
 
            <div className="flex-1 w-full relative min-h-[400px]">
-            {/* We use SVG overlay on top of Recharts or just straight SVG for the animation control */}
-           {/* Let's try to simulate this with pure SVG/Framer Motion for better animation control than Recharts allows easily */}
+            {timeline.length === 0 ? (
+              <div className="flex items-center justify-center h-full min-h-[400px]">
+                <div className="space-y-3 w-full px-8">
+                  <Skeleton className="h-4 w-full bg-collapse-surface" />
+                  <Skeleton className="h-48 w-full bg-collapse-surface" />
+                  <Skeleton className="h-4 w-2/3 bg-collapse-surface" />
+                </div>
+              </div>
+            ) : (
+              <>
            <div className="absolute inset-0 z-10 pointer-events-none">
              {revealed && (
-               <motion.div 
-                 initial={{ opacity: 0, y: 10 }} 
-                 animate={{ opacity: 1, y: 0 }} 
+               <motion.div
+                 initial={{ opacity: 0, y: 10 }}
+                 animate={{ opacity: 1, y: 0 }}
                  transition={{ delay: 1.2 }}
                  className="absolute top-1/4 left-1/4 bg-collapse-surface/90 backdrop-blur border border-collapse-safe rounded-lg p-3 shadow-xl"
                >
                  <span className="block text-xs text-collapse-muted uppercase font-bold">Projected Outcome</span>
-                 <span className="text-lg font-bold text-collapse-safe">-42% Risk</span>
-                 <span className="block text-xs text-collapse-muted">If applied at 55'</span>
+                 <span className="text-lg font-bold text-collapse-safe">-{riskDelta}% Risk</span>
+                 <span className="block text-xs text-collapse-muted">If applied at {interventionMinute}'</span>
                </motion.div>
              )}
            </div>
 
            <ResponsiveContainer width="100%" height="100%">
-             <AreaChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+             <AreaChart
+               key={`coach-${matchId}-${team}`}
+               data={chartData}
+               margin={{ top: 10, right: 10, left: 0, bottom: 0 }}
+             >
                <defs>
                  <linearGradient id="colorActual" x1="0" y1="0" x2="0" y2="1">
                    <stop offset="5%" stopColor="#94a3b8" stopOpacity={0.1}/>
@@ -188,7 +297,7 @@ export function CoachMode() {
                <Tooltip 
                  contentStyle={{ backgroundColor: '#1E293B', borderColor: '#334155', color: '#E2E8F0' }}
                />
-               <ReferenceLine x={55} stroke="#F59E0B" strokeDasharray="3 3" label={{ value: "Intervention", fill: "#F59E0B", fontSize: 10, position: 'insideTopLeft' }} />
+               <ReferenceLine x={interventionMinute} stroke="#F59E0B" strokeDasharray="3 3" label={{ value: "Intervention", fill: "#F59E0B", fontSize: 10, position: 'insideTopLeft' }} />
                
                {/* Actual Path - Fades out */}
                <Area 
@@ -223,8 +332,8 @@ export function CoachMode() {
                 {/* This is a simplified representation of the green line for animation purposes 
                     In a real app, we'd calculate the path d string based on the data points 
                 */}
-                <motion.path 
-                  d={`M ${55/80 * 100}% ${80}% Q ${65/80 * 100}% ${85}% ${80/80 * 100}% ${90}%`} // Approximate curve
+                <motion.path
+                  d={`M ${interventionMinute/80 * 100}% ${80}% Q ${(interventionMinute+10)/80 * 100}% ${85}% ${80/80 * 100}% ${90}%`}
                   fill="none"
                   stroke="#10B981"
                   strokeWidth="4"
@@ -247,6 +356,8 @@ export function CoachMode() {
                 />
              </svg>
            )}
+              </>
+            )}
         </div>
       </div>
     </div>

@@ -1,6 +1,9 @@
+// src/lib/api.ts — typed API client for CollapseOS backend
+
 import type {
   Match,
   DashboardStats,
+  MatchStats,
   TimelinePoint,
   GoalMarker,
   MatchWindow,
@@ -11,99 +14,109 @@ import type {
   FixtureComparison,
 } from './types'
 
-const BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
-async function get<T>(path: string): Promise<T> {
-  const res = await fetch(`${BASE}${path}`)
-  if (!res.ok) throw new Error(`API ${res.status}: ${res.statusText}`)
+export const DEMO_MATCH_ID = 3943043
+
+async function fetchJSON<T>(path: string): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`)
+  if (!res.ok) throw new Error(`API error ${res.status}: ${path}`)
   return res.json()
 }
 
-async function post<T>(path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
+async function postJSON<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: body != null ? JSON.stringify(body) : undefined,
+    body: JSON.stringify(body),
   })
-  if (!res.ok) throw new Error(`API ${res.status}: ${res.statusText}`)
+  if (!res.ok) throw new Error(`API error ${res.status}: ${path}`)
   return res.json()
 }
 
-// Matches
-export async function fetchMatches(): Promise<Match[]> {
-  return get<Match[]>('/api/matches')
+// ── Matches ──────────────────────────────────────────────
+export function getMatches() {
+  return fetchJSON<Match[]>('/api/matches')
 }
 
-export async function fetchMatch(matchId: string): Promise<Match> {
-  return get<Match>(`/api/matches/${matchId}`)
+export function getMatchTeams(matchId: number) {
+  return fetchJSON<string[]>(`/api/match/${matchId}/teams`)
 }
 
-// Dashboard
-export async function fetchDashboardStats(): Promise<DashboardStats> {
-  return get<DashboardStats>('/api/dashboard/stats')
+export function getDashboardStats() {
+  return fetchJSON<DashboardStats>('/api/dashboard/stats')
 }
 
-// Timeline & goals (for War Room)
-export async function fetchTimeline(matchId: string): Promise<TimelinePoint[]> {
-  return get<TimelinePoint[]>(`/api/matches/${matchId}/timeline`)
+export function getMatchStats(matchId: number) {
+  return fetchJSON<MatchStats>(`/api/match/${matchId}/stats`)
 }
 
-export async function fetchGoals(matchId: string): Promise<GoalMarker[]> {
-  return get<GoalMarker[]>(`/api/matches/${matchId}/goals`)
-}
-
-// Match window (timeline + goals for a range)
-export async function fetchMatchWindow(
-  matchId: string,
-  minuteFrom: number,
-  minuteTo: number
-): Promise<MatchWindow> {
-  return get<MatchWindow>(
-    `/api/matches/${matchId}/window?minute_from=${minuteFrom}&minute_to=${minuteTo}`
+// ── War Room ─────────────────────────────────────────────
+export function getTimeline(matchId: number, team: string) {
+  return fetchJSON<TimelinePoint[]>(
+    `/api/match/${matchId}/timeline?team=${encodeURIComponent(team)}`
   )
 }
 
-// Counterfactual (Coach Mode)
-export async function fetchCounterfactual(
-  matchId: string,
-  interventionMinute: number
-): Promise<CounterfactualPoint[]> {
-  return get<CounterfactualPoint[]>(
-    `/api/matches/${matchId}/counterfactual?intervention_minute=${interventionMinute}`
+export function getGoals(matchId: number) {
+  return fetchJSON<GoalMarker[]>(`/api/match/${matchId}/goals`)
+}
+
+export function getWindow(matchId: number, minute: number, team: string) {
+  return fetchJSON<MatchWindow>(
+    `/api/match/${matchId}/window/${minute}?team=${encodeURIComponent(team)}`
   )
 }
 
-// Pass network (Injury Sim / graph)
-export async function fetchPassNetwork(
-  matchId: string,
-  upToMinute?: number
-): Promise<PassNetwork> {
-  const q = upToMinute != null ? `?up_to_minute=${upToMinute}` : ''
-  return get<PassNetwork>(`/api/matches/${matchId}/pass-network${q}`)
+// ── Coach Mode ───────────────────────────────────────────
+export function getCounterfactual(matchId: number, minute: number, team: string) {
+  return fetchJSON<CounterfactualPoint[]>(
+    `/api/match/${matchId}/counterfactual/${minute}?team=${encodeURIComponent(team)}`
+  )
 }
 
-// Player removal simulation
-export async function simulatePlayerRemoval(
-  matchId: string,
-  playerId: string
-): Promise<PlayerRemovalResult> {
-  return post<PlayerRemovalResult>(`/api/matches/${matchId}/simulate-removal`, {
-    player_id: playerId,
+// Coach Mode: Gemini AI suggestions
+export function getCoachSuggestions(params: {
+  team: string
+  minute: number
+  risk_percent: number
+  headline: string
+  rationale: string[]
+}) {
+  return postJSON<{ suggestions: string }>('/api/coach/suggestions', params)
+}
+
+// ── Injury Sim ───────────────────────────────────────────
+export function getPassNetwork(matchId: number, minute: number, team: string) {
+  return fetchJSON<PassNetwork>(
+    `/api/match/${matchId}/network/${minute}?team=${encodeURIComponent(team)}`
+  )
+}
+
+export function simulatePlayerRemoval(
+  matchId: number,
+  team: string,
+  player: string,
+  minute: number
+) {
+  return postJSON<PlayerRemovalResult>(`/api/match/${matchId}/simulate_removal`, {
+    team,
+    player,
+    minute,
   })
 }
 
-// WC 2026 venues
-export async function fetchWC2026Venues(): Promise<WC2026Venue[]> {
-  return get<WC2026Venue[]>('/api/wc2026/venues')
+// ── WC2026 ───────────────────────────────────────────────
+export function getWC2026Venues() {
+  return fetchJSON<WC2026Venue[]>('/api/wc2026/venues')
 }
 
-// Fixture comparison
-export async function fetchFixtureComparisons(): Promise<FixtureComparison[]> {
-  return get<FixtureComparison[]>('/api/wc2026/fixture-comparisons')
-}
-
-export async function fetchFixtureComparison(
-  fixtureId: number
-): Promise<FixtureComparison> {
-  return get<FixtureComparison>(`/api/wc2026/fixture-comparisons/${fixtureId}`)
+export function getFixtureComparison(
+  teamA: string,
+  teamB: string,
+  venueCity: string
+) {
+  return fetchJSON<FixtureComparison>(
+    `/api/wc2026/fixture?team_a=${encodeURIComponent(teamA)}&team_b=${encodeURIComponent(teamB)}&venue_city=${encodeURIComponent(venueCity)}`
+  )
 }

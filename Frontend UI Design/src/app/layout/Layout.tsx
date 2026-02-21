@@ -2,20 +2,15 @@ import { Outlet, useLocation } from "react-router";
 import { NavLink } from "../components/router-components";
 import { 
   LayoutDashboard, 
-  BarChart2, 
   Globe, 
   ShieldCheck, 
   Settings, 
-  Bell, 
-  Search, 
   Menu,
   ChevronRight,
   User,
-  LogOut,
   Swords,
   BrainCircuit,
   Stethoscope,
-  Palette
 } from "lucide-react";
 import { useState } from "react";
 import { clsx } from "clsx";
@@ -60,10 +55,6 @@ export function Layout() {
           <NavItem to="/coach-mode" icon={<BrainCircuit size={20} />} label="Coach Mode" isOpen={isSidebarOpen} />
           <NavItem to="/injury-sim" icon={<Stethoscope size={20} />} label="Injury Sim" isOpen={isSidebarOpen} />
           <NavItem to="/wc-2026" icon={<Globe size={20} />} label="WC 2026" isOpen={isSidebarOpen} />
-          
-          <div className="my-6 border-t border-collapse-border/50 mx-3" />
-          
-          <NavItem to="/theme" icon={<Palette size={20} />} label="Theme Showcase" isOpen={isSidebarOpen} />
           <NavItem to="/settings" icon={<Settings size={20} />} label="Settings" isOpen={isSidebarOpen} />
         </nav>
 
@@ -108,21 +99,6 @@ export function Layout() {
                   {location.pathname === '/' ? 'Dashboard' : location.pathname.slice(1).replace('-', ' ')}
                 </span>
              </div>
-          </div>
-
-          <div className="flex items-center gap-4">
-            <div className="relative hidden md:block">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-collapse-muted" />
-              <input 
-                type="text" 
-                placeholder="Search..." 
-                className="bg-collapse-surface border border-collapse-border rounded-lg pl-9 pr-4 py-1.5 text-sm focus:outline-none focus:border-collapse-accent w-64 text-collapse-text placeholder:text-collapse-muted transition-all"
-              />
-            </div>
-            <button className="relative p-2 text-collapse-muted hover:text-collapse-text hover:bg-collapse-surface rounded-lg transition-colors">
-              <Bell className="w-5 h-5" />
-              <span className="absolute top-2 right-2 w-2 h-2 bg-collapse-risk rounded-full border-2 border-collapse-bg"></span>
-            </button>
           </div>
         </header>
 
