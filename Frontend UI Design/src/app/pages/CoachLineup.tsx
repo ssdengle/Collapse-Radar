@@ -1,8 +1,9 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
-import { Users, X, Plus, AlertTriangle, TrendingUp, Shield, RefreshCw } from 'lucide-react';
+import { useLocation } from 'react-router';
+import { Users, X, Plus, AlertTriangle, TrendingUp, Shield, RefreshCw, Medal } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import ForceGraph2D from 'react-force-graph-2d';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, Cell } from 'recharts';
 
 const API_BASE = 'http://127.0.0.1:8000';
 const get = (url: string) => fetch(`${API_BASE}${url}`).then(r => r.json());
@@ -24,7 +25,8 @@ interface Edge { source: string; target: string; weight: number; }
 function clamp(n: number, lo: number, hi: number) { return Math.min(hi, Math.max(lo, n)); }
 
 function loadColor(load: number) {
-  const x = clamp(load, 0, 100);
+  // Use rounded value so color bucket matches displayed % label.
+  const x = Math.round(clamp(load, 0, 100));
   if (x < 60) return '#22c55e';
   if (x < 80) return '#f59e0b';
   return '#ef4444';
@@ -39,12 +41,71 @@ function loadLabel(load: number) {
 const POS_ORDER = ['GK','RB','CB','LB','CDM','CM','CAM','RW','LW','ST','CF'];
 function posOrder(pos: string) { const i = POS_ORDER.indexOf(pos); return i < 0 ? 99 : i; }
 
+const POS_X_PREF: Record<string, number> = {
+  // Back line
+  LB: 12, CB: 50, RB: 88,
+  // Midfield spine
+  CDM: 50, DM: 50, CM: 50, CAM: 50, MF: 50,
+  // Front line
+  LW: 16, RW: 84, ST: 50, CF: 50,
+  // Keeper
+  GK: 50,
+};
+
+function spreadSameLane(center: number, count: number) {
+  if (count <= 1) return [center];
+  const step = 24;
+  const out: number[] = [];
+  const start = -((count - 1) / 2) * step;
+  for (let i = 0; i < count; i++) out.push(center + start + i * step);
+  return out.map(x => clamp(x, 8, 92));
+}
+
+function getShortNameMap(players: Player[]) {
+  const lastCounts: Record<string, number> = {};
+  players.forEach(p => {
+    const parts = p.name.trim().split(/\s+/);
+    const last = parts[parts.length - 1];
+    lastCounts[last] = (lastCounts[last] ?? 0) + 1;
+  });
+  const out: Record<string, string> = {};
+  players.forEach(p => {
+    const parts = p.name.trim().split(/\s+/);
+    const first = parts[0] ?? p.name;
+    const last = parts[parts.length - 1] ?? p.name;
+    out[p.name] = (lastCounts[last] ?? 0) > 1 ? `${first[0]}. ${last}` : last;
+  });
+  return out;
+}
+
 // ── Player card ─────────────────────────────────────────────────────────────
-function PlayerCard({ player, inXI, onToggle }: { player: Player; inXI: boolean; onToggle: () => void }) {
+function PlayerCard({
+  player, inXI, onToggle, dragHandlers, isDragOver, isDragging,
+}: {
+  player: Player; inXI: boolean; onToggle: () => void;
+  dragHandlers?: {
+    onDragStart: (e: React.DragEvent) => void;
+    onDragOver: (e: React.DragEvent) => void;
+    onDragEnter: (e: React.DragEvent) => void;
+    onDrop: (e: React.DragEvent) => void;
+    onDragEnd: () => void;
+  };
+  isDragOver?: boolean; isDragging?: boolean;
+}) {
   const { text, cls } = loadLabel(player.load);
   return (
     <motion.div layout initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95 }}
-      className={`rounded-xl border transition-all p-3 ${inXI ? 'border-collapse-accent/30 bg-collapse-accent/5' : 'border-collapse-border bg-collapse-surface'}`}>
+      draggable
+      onDragStart={dragHandlers?.onDragStart}
+      onDragOver={dragHandlers?.onDragOver}
+      onDragEnter={dragHandlers?.onDragEnter}
+      onDrop={dragHandlers?.onDrop}
+      onDragEnd={dragHandlers?.onDragEnd}
+      className={`rounded-xl border transition-all p-3 cursor-grab active:cursor-grabbing ${
+        isDragOver ? 'border-collapse-accent bg-collapse-accent/10 ring-1 ring-collapse-accent/50 scale-[1.02]' :
+        isDragging  ? 'opacity-40 border-collapse-border' :
+        inXI ? 'border-collapse-accent/30 bg-collapse-accent/5' : 'border-collapse-border bg-collapse-surface'
+      }`}>
       <div className="flex items-start gap-2 mb-2.5">
         <div className="flex-1 min-w-0">
           <p className="text-sm font-semibold text-collapse-text truncate">{player.name}</p>
@@ -117,6 +178,7 @@ function RiskDelta({ base, adjusted, missing }: { base: number; adjusted: number
 // ── Force graph wrapper ──────────────────────────────────────────────────────
 function PassNetwork({ players, edges }: { players: Player[]; edges: Edge[] }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
   const [dims, setDims] = useState({ w: 600, h: 400 });
 
   useEffect(() => {
@@ -129,49 +191,67 @@ function PassNetwork({ players, edges }: { players: Player[]; edges: Edge[] }) {
     return () => obs.disconnect();
   }, []);
 
-  const graphData = useMemo(() => {
-    const nameSet = new Set(players.map(p => p.name));
+  const { nodes, links } = useMemo(() => {
+    const coords = getFormationCoords(players);
+    const byName: Record<string, { x: number; y: number; p: Player }> = {};
+    coords.forEach(({ player, xPct, yPct }) => {
+      byName[player.name] = {
+        x: (xPct / 100) * dims.w,
+        y: (yPct / 100) * dims.h,
+        p: player,
+      };
+    });
+    const nameSet = new Set(Object.keys(byName));
+
+    // Collapse duplicate undirected links to a single stronger link.
+    const linkMap = new Map<string, { source: string; target: string; value: number }>();
+    edges.forEach(e => {
+      if (!nameSet.has(e.source) || !nameSet.has(e.target)) return;
+      const [a, b] = e.source < e.target ? [e.source, e.target] : [e.target, e.source];
+      const key = `${a}__${b}`;
+      const prev = linkMap.get(key);
+      if (!prev || e.weight > prev.value) linkMap.set(key, { source: a, target: b, value: e.weight });
+    });
+
     return {
-      nodes: players.map(p => ({ id: p.name, name: p.name, pos: p.pos, load: p.load, influence: p.influence })),
-      links: edges
-        .filter(e => nameSet.has(e.source) && nameSet.has(e.target))
-        .map(e => ({ source: e.source, target: e.target, value: e.weight })),
+      nodes: Object.entries(byName).map(([name, v]) => ({ id: name, ...v })),
+      links: Array.from(linkMap.values()),
     };
-  }, [players, edges]);
+  }, [players, edges, dims]);
 
-  const nodeCanvasObject = useCallback((node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
-    const r = 3 + node.influence * 1.2;
-    const col = loadColor(node.load);
-
-    // Outer ring
-    ctx.beginPath();
-    ctx.arc(node.x, node.y, r + 3, 0, 2 * Math.PI);
-    ctx.fillStyle = col + '22';
-    ctx.fill();
-
-    // Node circle
-    ctx.beginPath();
-    ctx.arc(node.x, node.y, r, 0, 2 * Math.PI);
-    ctx.fillStyle = col + 'CC';
-    ctx.fill();
-    ctx.strokeStyle = col;
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
-
-    // Position tag
-    const fontSize = Math.max(8, 9 / globalScale);
-    ctx.font = `bold ${fontSize}px Inter, system-ui, sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#fff';
-    ctx.fillText(node.pos, node.x, node.y);
-
-    // Name label below
-    const labelSize = Math.max(7, 8 / globalScale);
-    ctx.font = `${labelSize}px Inter, system-ui, sans-serif`;
-    ctx.fillStyle = 'rgba(226,232,240,0.9)';
-    ctx.fillText(node.name, node.x, node.y + r + labelSize + 2);
+  // Keep the network alive with subtle tactical movement (not chaotic physics).
+  const [phase, setPhase] = useState(0);
+  useEffect(() => {
+    const id = window.setInterval(() => setPhase(p => p + 0.055), 33);
+    return () => window.clearInterval(id);
   }, []);
+
+  const [manualPos, setManualPos] = useState<Record<string, { x: number; y: number }>>({});
+  const [dragNodeId, setDragNodeId] = useState<string | null>(null);
+
+  const pointFromEvent = (e: React.MouseEvent<SVGSVGElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = ((e.clientX - rect.left) / Math.max(1, rect.width)) * dims.w;
+    const y = ((e.clientY - rect.top) / Math.max(1, rect.height)) * dims.h;
+    return { x, y };
+  };
+
+  const animated = useMemo(() => {
+    const byId = new Map<string, { x: number; y: number; p: Player }>();
+    nodes.forEach((n, idx) => {
+      const fixed = manualPos[n.id];
+      if (fixed) {
+        byId.set(n.id, { ...n, x: fixed.x, y: fixed.y });
+        return;
+      }
+      const baseAmp = 2.5 + (n.p.influence / 10) * 2.5; // 2.5..5px
+      const seed = (idx + 1) * 0.71;
+      const dx = Math.sin(phase + seed) * baseAmp;
+      const dy = Math.cos(phase * 0.85 + seed * 1.3) * (baseAmp * 0.7);
+      byId.set(n.id, { ...n, x: n.x + dx, y: n.y + dy });
+    });
+    return byId;
+  }, [nodes, phase, manualPos]);
 
   if (players.length === 0) {
     return (
@@ -185,24 +265,256 @@ function PassNetwork({ players, edges }: { players: Player[]; edges: Edge[] }) {
     );
   }
 
+  const shortNames = getShortNameMap(players);
   return (
     <div ref={containerRef} className="h-full w-full">
-      <ForceGraph2D
-        width={dims.w} height={dims.h}
-        graphData={graphData}
-        backgroundColor="transparent"
-        nodeLabel={(n: any) => `${n.name} (${n.pos}) — Load: ${Math.round(n.load)}% · Influence: ${n.influence}`}
-        nodeVal={(n: any) => n.influence}
-        linkWidth={(l: any) => Math.max(0.5, (l.value || 1) / 8)}
-        linkColor={() => 'rgba(148,163,184,0.25)'}
-        linkDirectionalArrowLength={3}
-        linkDirectionalArrowRelPos={1}
-        nodeCanvasObject={nodeCanvasObject}
-        nodeCanvasObjectMode={() => 'replace'}
-        d3AlphaDecay={0.03}
-        d3VelocityDecay={0.3}
-        cooldownTime={2000}
-      />
+      <svg
+        ref={svgRef}
+        viewBox={`0 0 ${Math.max(1, dims.w)} ${Math.max(1, dims.h)}`}
+        className="w-full h-full"
+        onMouseMove={e => {
+          if (!dragNodeId) return;
+          const p = pointFromEvent(e);
+          setManualPos(prev => ({ ...prev, [dragNodeId]: p }));
+        }}
+        onMouseUp={() => setDragNodeId(null)}
+        onMouseLeave={() => setDragNodeId(null)}
+      >
+        {/* Links */}
+        {links.map((l, i) => {
+          const s = animated.get(l.source);
+          const t = animated.get(l.target);
+          if (!s || !t) return null;
+          const strokeW = 0.8 + (l.value / 10) * 2.8;
+          const opacity = 0.16 + (l.value / 10) * 0.42;
+          return (
+            <line
+              key={`${l.source}-${l.target}-${i}`}
+              x1={s.x} y1={s.y} x2={t.x} y2={t.y}
+              stroke={`rgba(125,211,252,${opacity.toFixed(3)})`}
+              strokeWidth={strokeW}
+              strokeLinecap="round"
+            />
+          );
+        })}
+
+        {/* Nodes */}
+        {Array.from(animated.values()).map(n => {
+          const r = 14 + n.p.influence * 1.55;
+          const col = loadColor(n.p.load);
+          return (
+            <g
+              key={n.id}
+              onMouseDown={e => {
+                e.preventDefault();
+                setDragNodeId(n.id);
+                const p = pointFromEvent(e as unknown as React.MouseEvent<SVGSVGElement>);
+                setManualPos(prev => ({ ...prev, [n.id]: p }));
+              }}
+              style={{ cursor: dragNodeId === n.id ? 'grabbing' : 'grab' }}
+            >
+              <circle cx={n.x} cy={n.y} r={r + 5} fill={col} opacity="0.14" />
+              <circle cx={n.x} cy={n.y} r={r} fill={col} opacity="0.92" stroke={col} strokeWidth="2" />
+              <text x={n.x} y={n.y + 1} textAnchor="middle" dominantBaseline="middle" fill="#fff" fontSize="13" fontWeight="800">
+                {n.p.pos}
+              </text>
+              <text x={n.x} y={n.y + r + 15} textAnchor="middle" fill="rgba(226,232,240,0.95)" fontSize="11" fontWeight="600">
+                {shortNames[n.p.name]}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+// ── Pitch Formation view ─────────────────────────────────────────────────────
+const POS_ROW: Record<string, number> = {
+  GK: 0, LB: 1, CB: 1, RB: 1,
+  CDM: 2, DM: 2, CM: 3, CAM: 4,
+  LW: 5, RW: 5, ST: 5, CF: 5, MF: 3,
+};
+// Y% on pitch per row — GK at bottom (defend side), attackers at top (attack side)
+// Row 0=GK → y=86%, Row 5=ATT → y=12%
+const ROW_Y_PCT = [86, 74, 62, 50, 38, 24, 12];
+
+function getFormationCoords(players: Player[]) {
+  const rows: Record<number, Player[]> = {};
+  for (const p of players) {
+    const row = POS_ROW[p.pos] ?? 3;
+    if (!rows[row]) rows[row] = [];
+    rows[row].push(p);
+  }
+  const result: { player: Player; xPct: number; yPct: number; row: number }[] = [];
+  for (const [rowStr, rp] of Object.entries(rows)) {
+    const row = Number(rowStr);
+    const yPct = ROW_Y_PCT[row] ?? 50;
+    const byPref = [...rp].sort((a, b) => (POS_X_PREF[a.pos] ?? 50) - (POS_X_PREF[b.pos] ?? 50));
+
+    // Group players that share the same lane preference (e.g. two CBs, two CMs).
+    const laneGroups: Record<number, Player[]> = {};
+    byPref.forEach(p => {
+      const pref = POS_X_PREF[p.pos] ?? 50;
+      (laneGroups[pref] = laneGroups[pref] || []).push(p);
+    });
+
+    Object.entries(laneGroups).forEach(([prefStr, group]) => {
+      const pref = Number(prefStr);
+      const xs = spreadSameLane(pref, group.length);
+      group.forEach((p, i) => {
+        result.push({ player: p, xPct: xs[i], yPct, row });
+      });
+    });
+  }
+  return result;
+}
+
+function getFormationName(players: Player[]) {
+  const counts: Record<number, number> = {};
+  for (const p of players) {
+    const row = POS_ROW[p.pos] ?? 3;
+    if (row > 0) counts[row] = (counts[row] ?? 0) + 1;
+  }
+  // Read defense → attack: row 1 (defenders) first, row 5 (attackers) last
+  const rows = Object.keys(counts).map(Number).sort((a, b) => a - b);
+  return rows.map(r => counts[r]).join('-');
+}
+
+function PitchFormation({ players, onToggle }: { players: Player[]; onToggle: (id: number) => void }) {
+  const VW = 420; const VH = 640;
+  const px = (x: number) => (x / 100) * VW;
+  const py = (y: number) => (y / 100) * VH;
+
+  if (players.length === 0) {
+    return (
+      <div className="h-full flex flex-col items-center justify-center gap-3 text-center">
+        <div className="w-14 h-14 rounded-2xl bg-collapse-surface border border-collapse-border flex items-center justify-center">
+          <Users className="w-6 h-6 text-collapse-border"/>
+        </div>
+        <p className="text-sm text-collapse-muted">Add players to see the formation</p>
+        <p className="text-xs text-collapse-dim max-w-xs">Players will appear in their tactical position on the pitch</p>
+      </div>
+    );
+  }
+
+  const coords = getFormationCoords(players);
+  const formation = getFormationName(players);
+  const shortNames = getShortNameMap(players);
+
+  // Group coords by row for drawing connecting lines
+  const byRow: Record<number, typeof coords> = {};
+  for (const c of coords) {
+    if (!byRow[c.row]) byRow[c.row] = [];
+    byRow[c.row].push(c);
+  }
+
+  return (
+    <div className="flex flex-col items-center h-full py-3 gap-2">
+      {/* Formation label */}
+      <div className="flex items-center gap-2">
+        <span className="text-[10px] font-bold text-collapse-muted uppercase tracking-wider">Formation</span>
+        <span className="text-xs font-black font-mono text-collapse-accent">{formation}</span>
+        <span className="text-[10px] text-collapse-dim">· click player to remove</span>
+      </div>
+
+      <svg viewBox={`0 0 ${VW} ${VH}`} className="flex-1 max-h-[620px] w-auto">
+        {/* Grass stripes */}
+        {Array.from({length: 8}, (_,i) => (
+          <rect key={i} x="0" y={i*(VH/8)} width={VW} height={VH/8}
+            fill={i%2===0 ? '#0d2318' : '#0b1e15'}/>
+        ))}
+        <rect width={VW} height={VH} fill="none" stroke="#1e5c35" strokeWidth="2"/>
+
+        {/* Pitch lines */}
+        {/* Halfway */}
+        <line x1="0" y1={VH/2} x2={VW} y2={VH/2} stroke="#1e5c35" strokeWidth="1.2"/>
+        {/* Centre circle */}
+        <circle cx={VW/2} cy={VH/2} r="36" fill="none" stroke="#1e5c35" strokeWidth="1.2"/>
+        <circle cx={VW/2} cy={VH/2} r="2.5" fill="#1e5c35"/>
+        {/* Top box */}
+        <rect x={px(18)} y="0" width={px(64)} height={py(16)} fill="none" stroke="#1e5c35" strokeWidth="1.2"/>
+        <rect x={px(31)} y="0" width={px(38)} height={py(7)} fill="none" stroke="#1e5c35" strokeWidth="1.2"/>
+        {/* Bottom box */}
+        <rect x={px(18)} y={VH-py(16)} width={px(64)} height={py(16)} fill="none" stroke="#1e5c35" strokeWidth="1.2"/>
+        <rect x={px(31)} y={VH-py(7)} width={px(38)} height={py(7)} fill="none" stroke="#1e5c35" strokeWidth="1.2"/>
+        {/* Goals */}
+        <rect x={px(36)} y={-4} width={px(28)} height="6" fill="none" stroke="#1e5c35" strokeWidth="1.2"/>
+        <rect x={px(36)} y={VH-2} width={px(28)} height="6" fill="none" stroke="#1e5c35" strokeWidth="1.2"/>
+        {/* Penalty spots */}
+        <circle cx={VW/2} cy={py(11)} r="2" fill="#1e5c35"/>
+        <circle cx={VW/2} cy={VH-py(11)} r="2" fill="#1e5c35"/>
+
+        {/* Horizontal row connections (within each row, e.g. defensive line) */}
+        {Object.values(byRow).map((rowCoords, ri) => {
+          if (rowCoords.length < 2) return null;
+          const sorted = [...rowCoords].sort((a,b) => a.xPct - b.xPct);
+          return sorted.slice(0, -1).map((c, i) => (
+            <line key={`h-${ri}-${i}`}
+              x1={px(c.xPct)} y1={py(c.yPct)}
+              x2={px(sorted[i+1].xPct)} y2={py(sorted[i+1].yPct)}
+              stroke="rgba(100,210,255,0.5)" strokeWidth="2" strokeDasharray="5 3"/>
+          ));
+        })}
+
+        {/* Diagonal connections between adjacent rows (e.g. each CB → CDM, CDM → each CM) */}
+        {(() => {
+          const rowKeys = Object.keys(byRow).map(Number).sort((a,b) => a - b);
+          const lines: React.ReactNode[] = [];
+          rowKeys.slice(0, -1).forEach((row, ri) => {
+            const nextRow = rowKeys[ri + 1];
+            const upper = byRow[nextRow]; // closer to attack
+            const lower = byRow[row];    // closer to defend
+            // Connect each lower node to the nearest upper node
+            lower.forEach((lc, li) => {
+              const nearest = [...upper].sort((a, b) =>
+                Math.abs(a.xPct - lc.xPct) - Math.abs(b.xPct - lc.xPct)
+              ).slice(0, Math.ceil(upper.length / 2));
+              nearest.forEach((uc, ui) => {
+                lines.push(
+                  <line key={`d-${ri}-${li}-${ui}`}
+                    x1={px(lc.xPct)} y1={py(lc.yPct)}
+                    x2={px(uc.xPct)} y2={py(uc.yPct)}
+                    stroke="rgba(255,255,255,0.18)" strokeWidth="1.2"/>
+                );
+              });
+            });
+          });
+          return lines;
+        })()}
+
+        {/* Player nodes */}
+        {coords.map(({ player: p, xPct, yPct }) => {
+          const col = loadColor(p.load);
+          const x = px(xPct); const y = py(yPct);
+          return (
+            <g key={p.id} onClick={() => onToggle(p.id)} style={{ cursor: 'pointer' }}>
+              {/* Shadow */}
+              <circle cx={x+1} cy={y+2} r="20" fill="rgba(0,0,0,0.4)"/>
+              {/* Outer glow */}
+              <circle cx={x} cy={y} r="24" fill={col} opacity="0.15"/>
+              {/* Jersey circle */}
+              <circle cx={x} cy={y} r="20" fill={col} opacity="0.9"/>
+              {/* Inner highlight */}
+              <circle cx={x-4} cy={y-4} r="4" fill="rgba(255,255,255,0.15)"/>
+              {/* Position text */}
+              <text x={x} y={y+1} textAnchor="middle" dominantBaseline="middle"
+                fill="white" fontSize="8.5" fontWeight="800" letterSpacing="0.3">{p.pos}</text>
+              {/* Name */}
+              <text x={x} y={y+29} textAnchor="middle"
+                fill="rgba(255,255,255,0.95)" fontSize="8.5" fontWeight="600">{shortNames[p.name]}</text>
+              {/* Load pill */}
+              <rect x={x-14} y={y+35} width="28" height="10" rx="5" fill="rgba(0,0,0,0.5)"/>
+              <text x={x} y={y+43} textAnchor="middle"
+                fill={col} fontSize="7.2" fontWeight="800">{Math.round(p.load)}%</text>
+            </g>
+          );
+        })}
+
+        {/* Direction labels — ATTACK at top (attackers row), DEFEND at bottom (GK row) */}
+        <text x={VW/2} y="9" textAnchor="middle" fill="#2d7a50" fontSize="7" letterSpacing="3" fontWeight="bold">▲ ATTACK</text>
+        <text x={VW/2} y={VH-3} textAnchor="middle" fill="#2d7a50" fontSize="7" letterSpacing="3" fontWeight="bold">▼ DEFEND</text>
+      </svg>
     </div>
   );
 }
@@ -221,12 +533,119 @@ function Dropdown({ options, value, onChange, placeholder }: { options: string[]
   );
 }
 
+// ── Risk comparison chart ────────────────────────────────────────────────────
+function RiskComparison({ team, adjustedRisk, tournament }: { team: string; adjustedRisk: number | null; tournament: Tournament }) {
+  const { data: teamRisk } = useQuery<any>({
+    queryKey: ['team-risk-all'],
+    queryFn: () => get('/api/dashboard/team_risk'),
+  });
+
+  const rows: { team: string; risk: number; isMe: boolean }[] = useMemo(() => {
+    if (!teamRisk || !Array.isArray(teamRisk)) return [];
+    return [...teamRisk]
+      .map((t: any) => ({ team: t.team, risk: t.avg_risk, isMe: t.team === team }))
+      .sort((a, b) => a.risk - b.risk);
+  }, [teamRisk, team]);
+
+  if (!rows.length) return <div className="h-32 flex items-center justify-center text-collapse-muted text-xs">Loading comparison…</div>;
+
+  const myRisk = adjustedRisk ?? rows.find(r => r.isMe)?.risk ?? null;
+  const rank   = myRisk !== null ? rows.filter(r => r.risk < myRisk).length + 1 : null;
+  const total  = rows.length;
+  const better = rank !== null ? total - rank : null;
+
+  const chartData = rows.map(r => ({
+    team: r.team.length > 10 ? r.team.slice(0, 10) + '…' : r.team,
+    fullTeam: r.team,
+    risk: Math.round(r.risk * 100),
+    isMe: r.isMe,
+  }));
+
+  return (
+    <div className="space-y-4">
+      {/* Rank summary */}
+      {rank !== null && (
+        <div className="grid grid-cols-3 gap-3">
+          <div className="bg-collapse-surface border border-collapse-border rounded-xl px-4 py-3">
+            <p className="text-2xl font-black font-mono text-collapse-accent">#{rank}</p>
+            <p className="text-[10px] text-collapse-muted uppercase tracking-wide mt-0.5">Stability rank</p>
+            <p className="text-[10px] text-collapse-dim mt-1">of {total} teams · lower is more stable</p>
+          </div>
+          <div className="bg-collapse-surface border border-collapse-border rounded-xl px-4 py-3">
+            <p className={`text-2xl font-black font-mono ${myRisk! >= 0.55 ? 'text-red-400' : myRisk! >= 0.35 ? 'text-amber-400' : 'text-emerald-400'}`}>
+              {Math.round(myRisk! * 100)}%
+            </p>
+            <p className="text-[10px] text-collapse-muted uppercase tracking-wide mt-0.5">Lineup risk</p>
+            <p className="text-[10px] text-collapse-dim mt-1">{adjustedRisk ? 'adjusted for unfilled slots' : 'tournament baseline'}</p>
+          </div>
+          <div className="bg-collapse-surface border border-collapse-border rounded-xl px-4 py-3">
+            <p className={`text-2xl font-black font-mono ${(better ?? 0) >= total * 0.6 ? 'text-emerald-400' : 'text-amber-400'}`}>
+              {better}
+            </p>
+            <p className="text-[10px] text-collapse-muted uppercase tracking-wide mt-0.5">Teams more exposed</p>
+            <p className="text-[10px] text-collapse-dim mt-1">higher collapse risk than {team}</p>
+          </div>
+        </div>
+      )}
+
+      {/* Bar chart */}
+      <div className="bg-collapse-surface border border-collapse-border rounded-2xl p-5">
+        <div className="flex items-start justify-between mb-4">
+          <div>
+            <p className="text-sm font-bold text-collapse-text">All Teams — Collapse Risk</p>
+            <p className="text-[10px] text-collapse-muted mt-0.5">Sorted low → high · lower = more stable · your team highlighted</p>
+          </div>
+          {myRisk !== null && (
+            <div className="text-right">
+              <p className="text-[10px] text-collapse-dim">Your lineup</p>
+              <p className="text-xs font-mono font-bold text-collapse-accent">{Math.round(myRisk * 100)}% avg risk</p>
+            </div>
+          )}
+        </div>
+        <ResponsiveContainer width="100%" height={220}>
+          <BarChart data={chartData} margin={{ top: 8, right: 8, left: -24, bottom: 40 }} barSize={14}>
+            <XAxis dataKey="team" tick={{ fill: '#64748B', fontSize: 8 }} angle={-45} textAnchor="end" interval={0} axisLine={false} tickLine={false}/>
+            <YAxis tick={{ fill: '#64748B', fontSize: 9 }} tickFormatter={v => `${v}%`} axisLine={false} tickLine={false} domain={[0, 80]}/>
+            <Tooltip
+              contentStyle={{ background: 'rgba(10,18,40,0.97)', border: '1px solid rgba(148,163,184,0.25)', borderRadius: 8, fontSize: 11, boxShadow: '0 4px 20px rgba(0,0,0,0.5)' }}
+              labelStyle={{ color: '#94a3b8' }}
+              itemStyle={{ color: '#e2e8f0' }}
+              formatter={(v: number, _: string, props: any) => [`${v}%`, props.payload.fullTeam]}
+              labelFormatter={() => ''}/>
+            {myRisk !== null && (
+              <ReferenceLine y={Math.round(myRisk * 100)} stroke="#0EA5E9" strokeDasharray="4 2" strokeWidth={1.5}
+                label={{ value: `${team} lineup`, fill: '#0EA5E9', fontSize: 8, position: 'insideTopRight' }}/>
+            )}
+            <Bar dataKey="risk" radius={[3, 3, 0, 0]}>
+              {chartData.map((d, i) => (
+                <Cell key={i} fill={d.isMe ? '#0EA5E9' : d.risk >= 55 ? '#FF3B5C' : d.risk >= 35 ? '#F5A623' : '#22c55e'} opacity={d.isMe ? 1 : 0.65}/>
+              ))}
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+        <p className="text-[10px] text-collapse-dim mt-2">
+          <span className="text-collapse-accent font-medium">Blue = {team}</span> · <span className="text-red-400">Red = HIGH (&gt;55%)</span> · <span className="text-amber-400">Amber = MED</span> · <span className="text-emerald-400">Green = LOW</span>
+        </p>
+      </div>
+    </div>
+  );
+}
+
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 export function CoachLineup() {
-  const [tournament] = useState<Tournament>('wc2022');
-  const [team, setTeam] = useState('');
+  const location = useLocation();
+  const locState = (location.state as any) ?? {};
+
+  const [tournament, setTournament] = useState<Tournament>(locState.tournament ?? 'wc2022');
+  const [team, setTeam] = useState(locState.team ?? '');
   const [opponent, setOpponent] = useState('');
   const [xi, setXi] = useState<Set<number>>(new Set());
+  const [rightTab, setRightTab] = useState<'formation' | 'network' | 'compare'>('formation');
+
+  // Drag-and-drop state
+  const [draggingId, setDraggingId] = useState<number | null>(null);
+  const [dragOverId, setDragOverId] = useState<number | null>(null);
 
   const { data: teams = [] } = useQuery<string[]>({
     queryKey: ['coach-teams', tournament],
@@ -272,6 +691,46 @@ export function CoachLineup() {
     });
   }
 
+  function handleDrop(sourceId: number | null, targetId: number) {
+    if (sourceId === null || sourceId === targetId) { setDraggingId(null); setDragOverId(null); return; }
+    const srcInXI = xi.has(sourceId);
+    const tgtInXI = xi.has(targetId);
+    setXi(prev => {
+      const next = new Set(prev);
+      if (srcInXI && !tgtInXI) {
+        // Swap: take src out of XI, put target in XI
+        next.delete(sourceId); next.add(targetId);
+      } else if (!srcInXI && tgtInXI) {
+        // Swap: take target out of XI, put src in XI
+        next.delete(targetId); next.add(sourceId);
+      } else if (!srcInXI && !tgtInXI && next.size < 11) {
+        // Both on bench, add the dragged one if space
+        next.add(sourceId);
+      }
+      return next;
+    });
+    setDraggingId(null); setDragOverId(null);
+  }
+
+  function makeDragHandlers(id: number) {
+    return {
+      onDragStart: (e: React.DragEvent) => {
+        setDraggingId(id);
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', String(id));
+      },
+      onDragOver:  (e: React.DragEvent) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDragOverId(id); },
+      onDragEnter: (e: React.DragEvent) => { e.preventDefault(); setDragOverId(id); },
+      onDrop:      (e: React.DragEvent) => {
+        e.preventDefault();
+        const raw = e.dataTransfer.getData('text/plain');
+        const sourceId = raw ? Number(raw) : draggingId;
+        handleDrop(Number.isFinite(sourceId) ? sourceId : null, id);
+      },
+      onDragEnd:   () => { setDraggingId(null); setDragOverId(null); },
+    };
+  }
+
   const avgLoad   = xiPlayers.length ? xiPlayers.reduce((s, p) => s + p.load, 0) / xiPlayers.length : 0;
   const highRisk  = xiPlayers.filter(p => p.load >= 80).length;
 
@@ -279,20 +738,30 @@ export function CoachLineup() {
     <div className="h-full flex flex-col bg-collapse-bg text-collapse-text overflow-hidden">
       {/* Header */}
       <div className="shrink-0 px-8 pt-6 pb-0 border-b border-collapse-border bg-collapse-surface">
-        <div className="flex items-center justify-between mb-5">
+          <div className="flex items-center justify-between mb-5">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-collapse-accent to-collapse-purple flex items-center justify-center shadow-lg shadow-collapse-accent/20">
               <Users className="w-5 h-5 text-white"/>
             </div>
             <div>
-              <h1 className="text-xl font-bold tracking-tight">Lineup Builder</h1>
-              <p className="text-xs text-collapse-muted">Build your Starting XI · visualise pass influence network</p>
+              <div className="flex items-center gap-2">
+                <h1 className="text-xl font-bold tracking-tight">Lineup Builder</h1>
+                <span className={`text-[10px] font-bold px-2 py-0.5 rounded border uppercase tracking-wide ${
+                  tournament === 'wc2026' ? 'bg-purple-500/10 text-purple-400 border-purple-500/20' : 'bg-collapse-accent/10 text-collapse-accent border-collapse-accent/20'
+                }`}>{tournament === 'wc2026' ? 'WC 2026 Sim' : 'WC 2022'}</span>
+              </div>
+              <p className="text-xs text-collapse-muted">Build Starting XI · pass network · risk vs all teams</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <select value={tournament} onChange={e => { setTournament(e.target.value as Tournament); setTeam(''); setXi(new Set()); }}
+              className="appearance-none bg-collapse-surface border border-collapse-border rounded-xl px-3 py-2 text-xs text-collapse-text focus:border-collapse-accent focus:outline-none cursor-pointer">
+              <option value="wc2022">WC 2022</option>
+              <option value="wc2026">WC 2026 Sim</option>
+            </select>
             <Dropdown options={teams} value={team} onChange={v => { setTeam(v); if (v === opponent) setOpponent(''); }} placeholder="Your team…"/>
             <span className="text-collapse-muted text-sm font-medium">vs</span>
-            <Dropdown options={teams.filter(t => t !== team)} value={opponent} onChange={setOpponent} placeholder="Opponent…"/>
+            <Dropdown options={teams.filter(t => t !== team)} value={opponent} onChange={setOpponent} placeholder="Opponent (optional)…"/>
           </div>
         </div>
       </div>
@@ -355,7 +824,9 @@ export function CoachLineup() {
                   <AnimatePresence>
                     {xiPlayers.map(p => (
                       <div key={p.id} className="mb-2">
-                        <PlayerCard player={p} inXI={true} onToggle={() => togglePlayer(p.id)}/>
+                        <PlayerCard player={p} inXI={true} onToggle={() => togglePlayer(p.id)}
+                          dragHandlers={makeDragHandlers(p.id)}
+                          isDragOver={dragOverId === p.id} isDragging={draggingId === p.id}/>
                       </div>
                     ))}
                   </AnimatePresence>
@@ -365,12 +836,14 @@ export function CoachLineup() {
               {/* Available squad */}
               <div>
                 <p className="text-[10px] font-bold uppercase tracking-wider text-collapse-muted mb-2">
-                  Available — {benchPlayers.length} players {xi.size >= 11 && <span className="text-amber-400">(XI full)</span>}
+                  Bench — {benchPlayers.length} players {xi.size >= 11 && <span className="text-amber-400">(XI full)</span>}
                 </p>
                 <AnimatePresence>
                   {benchPlayers.map(p => (
                     <div key={p.id} className="mb-2">
-                      <PlayerCard player={p} inXI={false} onToggle={() => togglePlayer(p.id)}/>
+                      <PlayerCard player={p} inXI={false} onToggle={() => togglePlayer(p.id)}
+                        dragHandlers={makeDragHandlers(p.id)}
+                        isDragOver={dragOverId === p.id} isDragging={draggingId === p.id}/>
                     </div>
                   ))}
                 </AnimatePresence>
@@ -378,34 +851,50 @@ export function CoachLineup() {
             </div>
           </div>
 
-          {/* Right — pass network */}
+          {/* Right — tabs: Network / Compare */}
           <div className="flex flex-col overflow-hidden">
-            <div className="shrink-0 px-5 py-3 border-b border-collapse-border bg-collapse-surface/50 flex items-center justify-between">
-              <div>
-                <p className="text-sm font-bold text-collapse-text">Pass Influence Network</p>
-                <p className="text-[10px] text-collapse-muted mt-0.5">
-                  Node size = influence · Node color = stability load
-                  <span className="ml-2 inline-flex gap-2">
-                    <span className="text-emerald-400">● Stable</span>
-                    <span className="text-amber-400">● Caution</span>
-                    <span className="text-red-400">● High risk</span>
-                  </span>
-                </p>
+            {/* Tab header */}
+            <div className="shrink-0 px-5 border-b border-collapse-border bg-collapse-surface/50 flex items-center justify-between gap-4">
+              <div className="flex gap-1 py-2">
+                {([
+                  { id: 'formation', label: '⬜ Formation' },
+                  { id: 'network',   label: '⬡ Pass Network' },
+                  { id: 'compare',   label: '📊 Risk Comparison' },
+                ] as const).map(tab => (
+                  <button key={tab.id} onClick={() => setRightTab(tab.id)}
+                    className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                      rightTab === tab.id ? 'bg-collapse-accent/15 text-collapse-accent border border-collapse-accent/30' : 'text-collapse-muted hover:text-collapse-text'
+                    }`}>
+                    {tab.label}
+                  </button>
+                ))}
               </div>
-              {opponent && oppData && (
-                <div className="text-right">
-                  <p className="text-[10px] text-collapse-muted">vs <span className="text-collapse-text font-medium">{opponent}</span></p>
-                  <p className="text-[10px] text-collapse-dim">
-                    Opp avg load: <span className="font-mono" style={{ color: loadColor(oppData.players.reduce((s,p) => s + p.load,0) / (oppData.players.length||1)) }}>
-                      {(oppData.players.reduce((s,p) => s + p.load,0) / (oppData.players.length||1)).toFixed(0)}%
-                    </span>
-                  </p>
-                </div>
-              )}
+              <div className="flex items-center gap-3 py-2 shrink-0">
+                <span className="text-[10px] text-emerald-400">● &lt;60% stable</span>
+                <span className="text-[10px] text-amber-400">● 60–80% caution</span>
+                <span className="text-[10px] text-red-400">● &gt;80% high risk</span>
+              </div>
             </div>
-            <div className="flex-1 min-h-0">
-              <PassNetwork players={xiPlayers} edges={squadData?.edges ?? []}/>
-            </div>
+
+            {/* Tab body */}
+            {rightTab === 'formation' && (
+              <div className="flex-1 min-h-0 overflow-hidden">
+                <PitchFormation players={xiPlayers} onToggle={togglePlayer}/>
+              </div>
+            )}
+            {rightTab === 'network' && (
+              <div className="flex-1 min-h-0">
+                <PassNetwork players={xiPlayers} edges={squadData?.edges ?? []}/>
+              </div>
+            )}
+            {rightTab === 'compare' && (
+              <div className="flex-1 overflow-y-auto custom-scrollbar p-5">
+                <RiskComparison
+                  team={team}
+                  adjustedRisk={riskData?.adjusted_risk ?? null}
+                  tournament={tournament}/>
+              </div>
+            )}
           </div>
         </div>
       )}

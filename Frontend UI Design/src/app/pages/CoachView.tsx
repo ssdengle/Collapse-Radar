@@ -1,8 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useNavigate } from 'react-router';
 import {
   BrainCircuit, Target, Swords, Film, ChevronDown, AlertTriangle,
-  TrendingDown, Database, FlaskConical, ChevronRight, Info, Trophy,
+  TrendingDown, Database, FlaskConical, ChevronRight, Info, Trophy, ClipboardList,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
@@ -481,6 +482,7 @@ function TeamPage({ teams, tournament, mode = 'home', team, setTeam }: {
   team: string; setTeam: (t: string) => void;
 }) {
   const accentColor = mode === 'scout' ? '#7C3AED' : '#0EA5E9';
+  const navigate = useNavigate();
 
   const { data } = useQuery<TeamHome>({
     queryKey: ['team-home', team, tournament],
@@ -510,6 +512,14 @@ function TeamPage({ teams, tournament, mode = 'home', team, setTeam }: {
       <div className="flex items-center gap-3 flex-wrap">
         <Dropdown options={teams} value={team} onChange={setTeam} placeholder={mode === 'scout' ? 'Select opponent…' : 'Select your team…'} accent={accentColor}/>
         {data && <DataBadge source={data.data_source} hasRealData={data.has_real_data}/>}
+        {mode === 'home' && team && (
+          <button
+            onClick={() => navigate('/coach-lineup', { state: { team, tournament } })}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-collapse-accent/10 border border-collapse-accent/30 text-collapse-accent text-xs font-semibold hover:bg-collapse-accent/20 transition-all ml-auto">
+            <ClipboardList className="w-3.5 h-3.5"/>
+            Build Lineup →
+          </button>
+        )}
       </div>
 
       {!team && (
@@ -1232,7 +1242,7 @@ const PAGES: { id: Page; label: string; icon: typeof BrainCircuit }[] = [
 ];
 
 export function CoachView() {
-  const [page, setPage] = useState<Page>('matchup');
+  const [page, setPage] = useState<Page>('home');
   const [tournament, setTournament] = useState<Tournament>('wc2022');
 
   // Each tournament keeps its own independent selections, persisted across refreshes

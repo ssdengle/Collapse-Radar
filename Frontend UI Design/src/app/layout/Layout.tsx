@@ -10,7 +10,6 @@ import {
   Swords,
   BrainCircuit,
   Users,
-  ClipboardList,
 } from "lucide-react";
 import { useState } from "react";
 import { clsx } from "clsx";
@@ -55,7 +54,6 @@ export function Layout() {
           <NavItem to="/" icon={<LayoutDashboard size={20} />} label="Dashboard" isOpen={isSidebarOpen} />
           <NavItem to="/war-room" icon={<Swords size={20} />} label="War Room" isOpen={isSidebarOpen} />
           <NavItem to="/coach-view" icon={<BrainCircuit size={20} />} label="Coach View" isOpen={isSidebarOpen} />
-          <NavItem to="/coach-lineup" icon={<ClipboardList size={20} />} label="Lineup Builder" isOpen={isSidebarOpen} />
           <NavItem to="/player-portal" icon={<Users size={20} />} label="Player Portal" isOpen={isSidebarOpen} />
           <NavItem to="/wc-2026" icon={<Globe size={20} />} label="WC 2026" isOpen={isSidebarOpen} />
           <NavItem to="/settings" icon={<Settings size={20} />} label="Settings" isOpen={isSidebarOpen} />

@@ -1204,54 +1204,292 @@ def simulate_match(body: SimulateRequest):
 # Each squad entry: list of (name, position) tuples in starting XI order
 _SQUADS: dict = {
     "France": [
+        # Starting XI
         ("Lloris","GK"),("Varane","CB"),("Upamecano","CB"),("Hernandez","LB"),("Pavard","RB"),
         ("Tchouaméni","CDM"),("Camavinga","CM"),("Griezmann","CAM"),
         ("Dembélé","RW"),("Mbappé","LW"),("Giroud","ST"),
+        # Bench
+        ("Areola","GK"),("Konaté","CB"),("Lucas H.","CB"),("Rabiot","CM"),
+        ("Coman","RW"),("Nkunku","CAM"),("Thuram","ST"),
     ],
     "Argentina": [
+        # Starting XI
         ("E. Martínez","GK"),("Otamendi","CB"),("Romero","CB"),("Molina","RB"),("Acuña","LB"),
-        ("De Paul","CDM"),("Mac Allister","CM"),("Fernández","CM"),
+        ("De Paul","CDM"),("Mac Allister","CM"),("Enzo Fernández","CM"),
         ("Messi","CAM"),("Di María","RW"),("Álvarez","ST"),
+        # Bench
+        ("Rulli","GK"),("Lisandro Martínez","CB"),("Pezzella","CB"),("Guido Rodríguez","CDM"),
+        ("Dybala","CAM"),("Correa","ST"),("Lautaro Martínez","ST"),
     ],
     "Brazil": [
+        # Starting XI
         ("Alisson","GK"),("Militão","CB"),("Marquinhos","CB"),("Danilo","RB"),("Alex Sandro","LB"),
         ("Casemiro","CDM"),("Fred","CM"),("Paquetá","CM"),
         ("Rodrygo","RW"),("Vinícius Jr","LW"),("Richarlison","ST"),
+        # Bench
+        ("Ederson","GK"),("Bremer","CB"),("Gabriel Magalhães","CB"),("Bruno Guimarães","CM"),
+        ("Raphinha","RW"),("Gabriel Jesus","ST"),("Pedro","ST"),
     ],
     "England": [
+        # Starting XI
         ("Pickford","GK"),("Stones","CB"),("Maguire","CB"),("Trippier","RB"),("Shaw","LB"),
         ("Rice","CDM"),("Henderson","CM"),("Bellingham","CM"),
         ("Saka","RW"),("Rashford","LW"),("Kane","ST"),
+        # Bench
+        ("Ramsdale","GK"),("Dier","CB"),("Coady","CB"),("Gallagher","CM"),
+        ("Mount","CAM"),("Foden","RW"),("Wilson","ST"),
     ],
     "Germany": [
+        # Starting XI
         ("Neuer","GK"),("Rüdiger","CB"),("Süle","CB"),("Kimmich","RB"),("Raum","LB"),
         ("Gündoğan","CDM"),("Goretzka","CM"),("Müller","CAM"),
         ("Gnabry","RW"),("Leroy Sané","LW"),("Havertz","ST"),
+        # Bench
+        ("Trapp","GK"),("Schlotterbeck","CB"),("Kehrer","CB"),("Emre Can","CM"),
+        ("Julian Brandt","CAM"),("Hofmann","RW"),("Füllkrug","ST"),
     ],
     "Spain": [
+        # Starting XI
         ("Unai Simón","GK"),("Azpilicueta","RB"),("Laporte","CB"),("Pau Torres","CB"),("Jordi Alba","LB"),
-        ("Busquets","CDM"),("Rodri","CDM"),("Pedri","CM"),
+        ("Busquets","CDM"),("Rodri","CM"),("Pedri","CM"),
         ("Gavi","CM"),("Ferran Torres","RW"),("Morata","ST"),
+        # Bench
+        ("David Raya","GK"),("Eric García","CB"),("Carvajal","RB"),("Koke","CM"),
+        ("Dani Olmo","CAM"),("Asensio","RW"),("Soler","CM"),
     ],
     "Netherlands": [
+        # Starting XI
         ("Noppert","GK"),("Van Dijk","CB"),("De Ligt","CB"),("Dumfries","RB"),("Blind","LB"),
-        ("De Jong","CDM"),("Klaassen","CM"),("Gakpo","LW"),
+        ("Frenkie de Jong","CDM"),("Klaassen","CM"),("Gakpo","LW"),
         ("Bergwijn","RW"),("Depay","ST"),("Timber","CB"),
+        # Bench
+        ("Flekken","GK"),("De Vrij","CB"),("Ake","CB"),("Koopmeiners","CM"),
+        ("Berghuis","RW"),("Weghorst","ST"),("Wijnaldum","CM"),
     ],
     "Croatia": [
+        # Starting XI
         ("Livakovic","GK"),("Gvardiol","CB"),("Vida","CB"),("Juranovic","RB"),("Sosa","LB"),
         ("Brozovic","CDM"),("Modrić","CM"),("Kovačić","CM"),
         ("Vlašić","CAM"),("Perisić","LW"),("Kramarić","ST"),
+        # Bench
+        ("Grbić","GK"),("Erlić","CB"),("Sutalo","CB"),("Ivanušec","CM"),
+        ("Pašalić","CAM"),("Budimir","ST"),("Čop","RW"),
     ],
     "Morocco": [
+        # Starting XI
         ("Bono","GK"),("Hakimi","RB"),("Saiss","CB"),("Aguerd","CB"),("Mazraoui","RB"),
         ("Amrabat","CDM"),("Ounahi","CM"),("Ziyech","CAM"),
         ("Boufal","LW"),("En-Nesyri","ST"),("Dari","CB"),
+        # Bench
+        ("Munir","GK"),("Benoun","CB"),("El Yamiq","CB"),("Amallah","CM"),
+        ("Sabiri","RW"),("Abde","LW"),("Aboukhlal","ST"),
     ],
     "Portugal": [
+        # Starting XI
         ("Diogo Costa","GK"),("Cancelo","RB"),("Rúben Dias","CB"),("Pepe","CB"),("Guerreiro","LB"),
         ("Danilo","CDM"),("Bernardo","CM"),("Bruno Fernandes","CAM"),
         ("Félix","CAM"),("Leão","LW"),("Ronaldo","ST"),
+        # Bench
+        ("Rui Patrício","GK"),("Ricardo Horta","RW"),("João Mário","CM"),("Vitinha","CM"),
+        ("William Carvalho","CDM"),("André Silva","ST"),("Mateus Nunes","CM"),
+    ],
+    "Belgium": [
+        # Starting XI
+        ("Courtois","GK"),("Castagne","RB"),("Vertonghen","CB"),("Alderweireld","CB"),("T. Hazard","LB"),
+        ("Witsel","CDM"),("De Bruyne","CM"),("Tielemans","CM"),
+        ("E. Hazard","LW"),("Mertens","CAM"),("Lukaku","ST"),
+        # Bench
+        ("Mignolet","GK"),("Boyata","CB"),("Dendoncker","CDM"),("Vanaken","CM"),
+        ("Doku","RW"),("Batshuayi","ST"),("Openda","ST"),
+    ],
+    "Uruguay": [
+        # Starting XI
+        ("Rochet","GK"),("Nández","RB"),("Giménez","CB"),("Godín","CB"),("Olivera","LB"),
+        ("Valverde","CDM"),("Bentancur","CM"),("Vecino","CM"),
+        ("De Arrascaeta","CAM"),("L. Suárez","ST"),("Núñez","ST"),
+        # Bench
+        ("Muslera","GK"),("Cáceres","CB"),("Araújo","CB"),("Ugarte","CDM"),
+        ("Pellistri","RW"),("Cavani","ST"),("Vidal","CM"),
+    ],
+    "Denmark": [
+        # Starting XI
+        ("Schmeichel","GK"),("Kristensen","RB"),("Christensen","CB"),("Kjær","CB"),("Maehle","LB"),
+        ("Højbjerg","CDM"),("Delaney","CM"),("Eriksen","CAM"),
+        ("Lindstrøm","RW"),("Olsen","LW"),("Dolberg","ST"),
+        # Bench
+        ("Hermansen","GK"),("Wass","RB"),("Andersen","CB"),("Nørgaard","CM"),
+        ("Skov Olsen","RW"),("Cornelius","ST"),("Poulsen","LW"),
+    ],
+    "Switzerland": [
+        # Starting XI
+        ("Sommer","GK"),("Widmer","RB"),("Schär","CB"),("Akanji","CB"),("Rodriguez","LB"),
+        ("Freuler","CDM"),("Xhaka","CM"),("Sow","CM"),
+        ("Shaqiri","RW"),("Embolo","ST"),("Vargas","LW"),
+        # Bench
+        ("Kobel","GK"),("Elvedi","CB"),("Frei","CM"),("Steffen","CM"),
+        ("Okafor","LW"),("Zuber","LW"),("Seferovic","ST"),
+    ],
+    "USA": [
+        # Starting XI
+        ("Turner","GK"),("DeAndre Yedlin","RB"),("Walker Zimmerman","CB"),("Tim Ream","CB"),("Antonee Robinson","LB"),
+        ("Tyler Adams","CDM"),("Weston McKennie","CM"),("Yunus Musah","CM"),
+        ("Christian Pulisic","CAM"),("Timothy Weah","RW"),("Josh Sargent","ST"),
+        # Bench
+        ("Steffen","GK"),("Brooks","CB"),("Dest","RB"),("Acosta","CDM"),
+        ("Gio Reyna","CAM"),("Ferreira","ST"),("Sullivan","LW"),
+    ],
+    "Mexico": [
+        # Starting XI
+        ("Ochoa","GK"),("Sanchez","RB"),("Montes","CB"),("Moreno","CB"),("Gallardo","LB"),
+        ("Herrera","CDM"),("Gutiérrez","CM"),("Álvarez","CM"),
+        ("Lozano","RW"),("Vega","LW"),("Martín","ST"),
+        # Bench
+        ("Corona","GK"),("Araujo","CB"),("Orrantia","CB"),("Guardado","CM"),
+        ("Antuna","RW"),("Jiménez","ST"),("Sánchez","LW"),
+    ],
+    "Japan": [
+        # Starting XI
+        ("Gonda","GK"),("Yamane","RB"),("Yoshida","CB"),("Tanaka","CB"),("Nagatomo","LB"),
+        ("Endo","CDM"),("Morita","CM"),("Kamada","CAM"),
+        ("Doan","RW"),("Ito","LW"),("Maeda","ST"),
+        # Bench
+        ("Kawashima","GK"),("Itakura","CB"),("Sakai","RB"),("Shibasaki","CM"),
+        ("Asano","RW"),("Minamino","CAM"),("Furuhashi","ST"),
+    ],
+    "South Korea": [
+        # Starting XI
+        ("Kim Seung-gyu","GK"),("Kim Moon-hwan","RB"),("Kim Min-jae","CB"),("Kwon Kyung-won","CB"),("Kim Jin-su","LB"),
+        ("Jung Woo-young","CDM"),("Son Heung-min","LW"),("Lee Jae-sung","CM"),
+        ("Hwang In-beom","CM"),("Hwang Hee-chan","ST"),("Cho Gue-sung","ST"),
+        # Bench
+        ("Jo Hyeon-woo","GK"),("Kim Young-gwon","CB"),("Lee Ki-je","LB"),("Paik Seung-ho","CM"),
+        ("Lee Kang-in","CAM"),("Oh Hyeon-gyu","ST"),("Na Sang-ho","LW"),
+    ],
+    "Senegal": [
+        # Starting XI
+        ("Mendy","GK"),("Sabaly","RB"),("Koulibaly","CB"),("Diallo","CB"),("Jakobs","LB"),
+        ("Kouyaté","CDM"),("Gueye","CM"),("Sarr","RW"),
+        ("Mané","LW"),("Dia","ST"),("Diatta","CAM"),
+        # Bench
+        ("Gomis","GK"),("Badji","CB"),("Ciss","CM"),("Balde","LW"),
+        ("Famara Diédhiou","ST"),("Iliman Ndiaye","CAM"),("Pape Gueye","CM"),
+    ],
+    "Australia": [
+        # Starting XI
+        ("Ryan","GK"),("Degenek","RB"),("Rowles","CB"),("Souttar","CB"),("Behich","LB"),
+        ("Mooy","CDM"),("Irvine","CM"),("Leckie","RW"),
+        ("Goodwin","LW"),("Maclaren","ST"),("McGree","CAM"),
+        # Bench
+        ("Vukovic","GK"),("Atkinson","CB"),("Karacic","RB"),("Baccus","CM"),
+        ("Duke","ST"),("Kuol","RW"),("Grant","CB"),
+    ],
+    "Canada": [
+        # Starting XI
+        ("Borjan","GK"),("Johnston","RB"),("Miller","CB"),("Vitoria","CB"),("Laryea","LB"),
+        ("Eustáquio","CDM"),("Hutchinson","CM"),("Davies","LW"),
+        ("Buchanan","RW"),("David","ST"),("Hoilett","CAM"),
+        # Bench
+        ("Crepeau","GK"),("Adekugbe","LB"),("Henry","CB"),("Kaye","CM"),
+        ("Brym","RW"),("Larin","ST"),("Cavallini","ST"),
+    ],
+    "Wales": [
+        # Starting XI
+        ("Ward","GK"),("Roberts","RB"),("Rodon","CB"),("Davies","CB"),("N. Williams","LB"),
+        ("Morrell","CDM"),("Ampadu","CM"),("Ramsey","CAM"),
+        ("James","RW"),("Wilson","LW"),("Bale","ST"),
+        # Bench
+        ("Hennessey","GK"),("Mepham","CB"),("Lockyer","CB"),("Levitt","CM"),
+        ("Johnson","RW"),("Moore","ST"),("Colwill","CB"),
+    ],
+    "Ecuador": [
+        # Starting XI
+        ("Domínguez","GK"),("Preciado","RB"),("Hincapié","CB"),("Torres","CB"),("Estupiñán","LB"),
+        ("Caicedo","CDM"),("Gruezo","CM"),("Sarmiento","RW"),
+        ("Plata","LW"),("Valencia","ST"),("Ibarra","CAM"),
+        # Bench
+        ("Galíndez","GK"),("Escobar","LB"),("Cifuentes","CM"),("Minda","ST"),
+        ("Estrada","RW"),("Ángulo","LW"),("Preciado Jr","CB"),
+    ],
+    "Ghana": [
+        # Starting XI
+        ("Ati-Zigi","GK"),("Lamptey","RB"),("Salisu","CB"),("Amartey","CB"),("Mensah","LB"),
+        ("Thomas Partey","CDM"),("Samed","CM"),("Ayew","CAM"),
+        ("Williams","RW"),("Kudus","LW"),("Sulemana","ST"),
+        # Bench
+        ("Wollacott","GK"),("Djiku","CB"),("Baba Rahman","LB"),("Kyereh","CM"),
+        ("Sarfo Mensah","RW"),("Jordan Ayew","ST"),("Caleb Ekuban","ST"),
+    ],
+    "Serbia": [
+        # Starting XI
+        ("Rajković","GK"),("Milenkovic","RB"),("Pavlović","CB"),("Veljković","CB"),("Mladenović","LB"),
+        ("Gudelj","CDM"),("Lukić","CM"),("Tadic","CAM"),
+        ("Živković","RW"),("Vlahović","ST"),("Mitrović","ST"),
+        # Bench
+        ("Dmitrović","GK"),("Babić","CB"),("Spajić","CB"),("Ilic","CM"),
+        ("Grujić","CDM"),("Jović","ST"),("Radonjić","RW"),
+    ],
+    "Poland": [
+        # Starting XI
+        ("Szczesny","GK"),("Cash","RB"),("Glik","CB"),("Kiwior","CB"),("Bereszyński","LB"),
+        ("Krychowiak","CDM"),("Zielinski","CM"),("Frankowski","RW"),
+        ("Szymański","LW"),("Lewandowski","ST"),("Swiderski","ST"),
+        # Bench
+        ("Grabara","GK"),("Bednarek","CB"),("Wieteska","CB"),("Linetty","CM"),
+        ("Piątek","ST"),("Bielik","CDM"),("Kamiński","CM"),
+    ],
+    "Tunisia": [
+        # Starting XI
+        ("Dahmen","GK"),("Drager","RB"),("Talbi","CB"),("Meriah","CB"),("Abdi","LB"),
+        ("Skhiri","CDM"),("Ben Slimane","CM"),("Khazri","CAM"),
+        ("Jaziri","RW"),("Jebali","ST"),("Msakni","LW"),
+        # Bench
+        ("Ben Mustapha","GK"),("Maaloul","LB"),("Ben Hassine","CB"),("Laïdouni","CDM"),
+        ("Slimane","CAM"),("Badri","RW"),("Chaalali","CM"),
+    ],
+    "Saudi Arabia": [
+        # Starting XI
+        ("Al-Owais","GK"),("Al-Ghannam","RB"),("Al-Bulayhi","CB"),("Al-Tambakti","CB"),("Al-Shahrani","LB"),
+        ("Al-Malki","CDM"),("Al-Dawsari","LW"),("Kanno","CM"),
+        ("Al-Faraj","CM"),("Al-Shehri","ST"),("Bahebri","RW"),
+        # Bench
+        ("Al-Yami","GK"),("Al-Breik","CB"),("Al-Khaibari","RB"),("Al-Nemer","CM"),
+        ("Al-Burayk","LB"),("Al-Qasim","RW"),("Asiri","LW"),
+    ],
+    "Cameroon": [
+        # Starting XI
+        ("Onana","GK"),("Fai","RB"),("Castelletto","CB"),("Ngadeu","CB"),("Tolo","LB"),
+        ("Oum Gouet","CDM"),("Anguissa","CM"),("Mbeumo","RW"),
+        ("Toko Ekambi","LW"),("Choupo-Moting","ST"),("Hongla","CM"),
+        # Bench
+        ("Epassy","GK"),("Nkoulou","CB"),("Teikeu","CB"),("Kunde","CM"),
+        ("Aboubakar","ST"),("Bassogog","RW"),("Oyongo","LB"),
+    ],
+    "Qatar": [
+        # Starting XI
+        ("Al-Sheeb","GK"),("Rõ Rõ","RB"),("Khoukhi","CB"),("Al-Rawi","CB"),("Pedro Miguel","LB"),
+        ("Al-Haydos","CAM"),("Boudiaf","CDM"),("Al-Waad","CM"),
+        ("Afif","LW"),("Almoez Ali","ST"),("Muntari","ST"),
+        # Bench
+        ("Barsham","GK"),("Ismail","CB"),("Al-Ahrak","CM"),("Hassan Al-Haydos","RW"),
+        ("Yusuf Abdurisag","ST"),("Karimi","LW"),("Hatem","CDM"),
+    ],
+    "Iran": [
+        # Starting XI
+        ("Beiranvand","GK"),("Rezaeian","RB"),("Pouraligholi","CB"),("Hosseini","CB"),("Mohammadi","LB"),
+        ("Noorollahi","CDM"),("Ezatolahi","CM"),("Ghoddos","CAM"),
+        ("Karimi","RW"),("Taremi","ST"),("Ansarifard","LW"),
+        # Bench
+        ("Abbaszadeh","GK"),("Cheshmi","LB"),("Jalali","CM"),("Azmoun","ST"),
+        ("Shojaei","CM"),("Hajsafi","LB"),("Torabi","CM"),
+    ],
+    "Costa Rica": [
+        # Starting XI
+        ("Navas","GK"),("Duarte","RB"),("Waston","CB"),("Calvo","CB"),("Oviedo","LB"),
+        ("Tejeda","CDM"),("Borges","CM"),("Campbell","RW"),
+        ("Torres","LW"),("Contreras","ST"),("Ruiz","CAM"),
+        # Bench
+        ("Sequeira","GK"),("Vásquez","RB"),("Gamboa","CB"),("Vrancic","CM"),
+        ("Fuller","ST"),("Hernández","LW"),("Aguilera","CM"),
     ],
 }
 
@@ -1299,7 +1537,48 @@ def get_lineup_squad(team: str, tournament: str = "wc2022"):
                 real_edges.append({"source": fp_name, "target": tp, "weight": pc})
     db.close()
 
-    raw = _SQUADS.get(team, [(f"Player {i+1}", "MF") for i in range(11)])
+    # Normalise team name aliases (DB uses "United States", WC2026 list uses "USA", etc.)
+    _SQUAD_ALIASES = {"United States": "USA", "Korea Republic": "South Korea",
+                      "IR Iran": "Iran", "Côte d'Ivoire": "Ivory Coast"}
+    squad_key = _SQUAD_ALIASES.get(team, team)
+    raw = _SQUADS.get(squad_key, [(f"Player {i+1}", "MF") for i in range(11)])
+
+    # Team-level tactical shape override for the starting XI (gives per-team variation).
+    TEAM_SHAPES = {
+        "Argentina": "4-3-3", "Australia": "4-4-2", "Belgium": "3-4-2-1", "Brazil": "4-3-3",
+        "Cameroon": "4-3-3", "Canada": "3-4-3", "Costa Rica": "5-4-1", "Croatia": "4-3-3",
+        "Denmark": "3-4-3", "Ecuador": "4-4-2", "England": "4-3-3", "France": "4-2-3-1",
+        "Germany": "4-2-3-1", "Ghana": "4-2-3-1", "Iran": "4-4-1-1", "Japan": "4-2-3-1",
+        "Mexico": "4-3-3", "Morocco": "4-1-4-1", "Netherlands": "3-4-1-2", "Poland": "4-4-2",
+        "Portugal": "4-3-3", "Qatar": "3-5-2", "Saudi Arabia": "4-3-3", "Senegal": "4-3-3",
+        "Serbia": "3-5-2", "South Korea": "4-2-3-1", "Spain": "4-3-3", "Switzerland": "4-2-3-1",
+        "Tunisia": "4-3-3", "USA": "4-3-3", "Uruguay": "4-3-3", "Wales": "3-4-2-1",
+    }
+    SHAPE_POS = {
+        "4-3-3":   ["GK","RB","CB","CB","LB","CM","CM","CM","RW","LW","ST"],
+        "4-2-3-1": ["GK","RB","CB","CB","LB","CDM","CM","RW","CAM","LW","ST"],
+        "4-4-2":   ["GK","RB","CB","CB","LB","RW","CM","CM","LW","ST","ST"],
+        "3-4-3":   ["GK","CB","CB","CB","RB","LB","CM","CM","RW","LW","ST"],
+        "3-4-1-2": ["GK","CB","CB","CB","RB","LB","CM","CM","CAM","ST","ST"],
+        "3-5-2":   ["GK","CB","CB","CB","RB","LB","CDM","CM","CM","ST","ST"],
+        "4-1-4-1": ["GK","RB","CB","CB","LB","CDM","RW","CM","CM","LW","ST"],
+        "4-4-1-1": ["GK","RB","CB","CB","LB","RW","CM","CM","LW","CAM","ST"],
+        "5-4-1":   ["GK","RB","CB","CB","CB","LB","RW","CM","CM","LW","ST"],
+        "3-4-2-1": ["GK","CB","CB","CB","RB","LB","CM","CM","CAM","CAM","ST"],
+    }
+    shape = TEAM_SHAPES.get(squad_key)
+    if shape and shape in SHAPE_POS and len(raw) >= 11:
+        roles = SHAPE_POS[shape]
+        first = []
+        for i, e in enumerate(raw[:11]):
+            n, old = (e[0], e[1]) if isinstance(e, tuple) else (e, "MF")
+            first.append((n, roles[i] if i < len(roles) else old))
+        raw = first + list(raw[11:])
+
+    # Filter real_nodes/real_edges to only this team's players (pass_nodes tables include both teams)
+    squad_names = {(n[0] if isinstance(n, tuple) else n) for n in raw}
+    real_nodes = {k: v for k, v in real_nodes.items() if k in squad_names}
+    real_edges = [e for e in real_edges if e["source"] in squad_names and e["target"] in squad_names]
     players = []
     for i, entry in enumerate(raw):
         name, role = entry if isinstance(entry, tuple) else (entry, "MF")
@@ -1315,18 +1594,122 @@ def get_lineup_squad(team: str, tournament: str = "wc2022"):
             "load": load, "influence": influence,
         })
 
-    # Build pass edges using real data where available; fall back to synthetic
-    if not real_edges:
-        for i in range(len(raw)):
-            for j in range(len(raw)):
-                if i != j:
-                    ni, nj = raw[i], raw[j]
-                    n1 = ni[0] if isinstance(ni, tuple) else ni
-                    n2 = nj[0] if isinstance(nj, tuple) else nj
-                    s2 = _player_seed(n1) + _player_seed(n2)
-                    if (s2 + i * 11 + j * 7) % 4 == 0:
-                        real_edges.append({"source": n1, "target": n2,
-                                           "weight": 3 + (s2 + i + j) % 10})
+    # Build structural template edges for starting XI, then merge with real edges.
+    def _template_edges(starters_raw):
+        starter_info = []
+        for e in starters_raw:
+            n, p = (e[0], e[1]) if isinstance(e, tuple) else (e, "MF")
+            starter_info.append({"name": n, "pos": p})
+
+        by_pos: dict = {}
+        for sp in starter_info:
+            by_pos.setdefault(sp["pos"], []).append(sp["name"])
+
+        def pick(*roles):
+            out = []
+            for r in roles:
+                out.extend(by_pos.get(r, []))
+            return out
+
+        gk   = pick("GK")[:1]
+        lbs  = pick("LB")
+        rbs  = pick("RB")
+        cbs  = pick("CB")
+        cdm  = pick("CDM", "DM")[:1]
+        cms  = pick("CM", "MF")
+        cams = pick("CAM")
+        lws  = pick("LW")
+        rws  = pick("RW")
+        sts  = pick("ST", "CF")
+
+        # Fallbacks for odd lineups
+        pivot = cdm[0] if cdm else (cms[0] if cms else (cams[0] if cams else (sts[0] if sts else None)))
+        cam   = cams[0] if cams else (cms[1] if len(cms) > 1 else (cms[0] if cms else None))
+        lw    = lws[0] if lws else (cams[1] if len(cams) > 1 else None)
+        rw    = rws[0] if rws else (sts[1] if len(sts) > 1 else None)
+        st    = sts[0] if sts else (cam if cam and cam not in cms else None)
+
+        def w(base: int, a: str, b: str) -> int:
+            s = (_player_seed(a) + _player_seed(b)) % 3
+            return max(2, min(10, base + s))
+
+        seen: set = set()
+        out = []
+        def add(a: str, b: str, base: int):
+            if not a or not b or a == b:
+                return
+            key = tuple(sorted((a, b)))
+            if key in seen:
+                return
+            seen.add(key)
+            out.append({"source": a, "target": b, "weight": w(base, a, b)})
+
+        # 1) Build-out from GK
+        for cb in cbs[:2]:
+            for g in gk:
+                add(g, cb, 8)
+        for fb in (lbs[:1] + rbs[:1]):
+            for g in gk:
+                add(g, fb, 5)
+
+        # 2) Back line structure
+        if len(cbs) >= 2:
+            add(cbs[0], cbs[1], 7)
+        if lbs and cbs:
+            add(lbs[0], cbs[0], 7)
+        if rbs and cbs:
+            add(rbs[0], cbs[-1], 7)
+
+        # 3) Pivot links
+        if pivot:
+            for cb in cbs[:2]:
+                add(cb, pivot, 8)
+            if lbs:
+                add(lbs[0], pivot, 6)
+            if rbs:
+                add(rbs[0], pivot, 6)
+
+        # 4) Midfield mesh
+        if len(cms) >= 2:
+            add(cms[0], cms[1], 8)
+        for cm in cms[:3]:
+            if pivot:
+                add(pivot, cm, 8)
+            if cam:
+                add(cm, cam, 7)
+
+        # 5) Creation and final third
+        if cam:
+            if st:
+                add(cam, st, 8)
+            if lw:
+                add(cam, lw, 7)
+            if rw:
+                add(cam, rw, 7)
+        if lw and st:
+            add(lw, st, 6)
+        if rw and st:
+            add(rw, st, 6)
+
+        # 6) Fullback wide progression
+        if lbs and lw:
+            add(lbs[0], lw, 6)
+        if rbs and rw:
+            add(rbs[0], rw, 6)
+
+        return out
+
+    template_edges = _template_edges(raw[:11])
+
+    # Merge real + template so teams with sparse real edges still keep formation structure.
+    merged: dict = {}
+    for e in template_edges + real_edges:
+        a, b = (e["source"], e["target"])
+        key = tuple(sorted((a, b)))
+        prev = merged.get(key)
+        if not prev or e["weight"] > prev["weight"]:
+            merged[key] = {"source": key[0], "target": key[1], "weight": e["weight"]}
+    real_edges = list(merged.values())
 
     return {"players": players, "edges": real_edges}
 
@@ -1340,10 +1723,12 @@ def evaluate_lineup(body: dict):
     fp = _team_fingerprint(_normalize_team(team), db)
     db.close()
 
-    raw = _SQUADS.get(team, [])
-    full_xi  = len(raw)
-    present  = sum(1 for e in raw if (e[0] if isinstance(e, tuple) else e) in selected)
-    missing  = full_xi - present
+    _SQUAD_ALIASES2 = {"United States": "USA", "Korea Republic": "South Korea",
+                       "IR Iran": "Iran", "Côte d'Ivoire": "Ivory Coast"}
+    squad_key2 = _SQUAD_ALIASES2.get(team, team)
+    raw = _SQUADS.get(squad_key2, [])
+    # A Starting XI is always 11; missing = unfilled slots regardless of total squad size
+    missing  = max(0, 11 - len(selected))
 
     base_risk = round(fp.get("burstiness", 0.2) * 0.4 + fp.get("turnover_pm", 0.3) * 0.3 + 0.25, 3)
     delta     = round(missing * 0.025, 3)   # each missing player adds ~2.5pp risk
