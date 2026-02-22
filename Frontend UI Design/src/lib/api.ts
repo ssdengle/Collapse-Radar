@@ -79,6 +79,15 @@ export function getGoals(matchId: number) {
   return fetchJSON<GoalMarker[]>(`/api/match/${matchId}/goals`)
 }
 
+export function getShootout(matchId: number) {
+  return fetchJSON<{
+    has_shootout: boolean
+    penalty_winner?: string
+    penalty_score?: string
+    kicks?: Record<string, [string, boolean][]>
+  }>(`/api/match/${matchId}/shootout`)
+}
+
 export function getWindow(matchId: number, minute: number, team: string) {
   return fetchJSON<MatchWindow>(
     `/api/match/${matchId}/window/${minute}?team=${encodeURIComponent(team)}`

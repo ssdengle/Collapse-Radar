@@ -46,10 +46,16 @@ INTERNATIONAL_COMPETITIONS = (
 def get_matches():
     db = get_db()
     placeholders = ", ".join("?" for _ in INTERNATIONAL_COMPETITIONS)
+    # QUALIFY deduplicates same-fixture stored twice with home/away swapped
     rows = db.execute(
         f"SELECT match_id, competition, season, home_team, away_team, "
         f"home_score, away_score, match_date, is_demo_match FROM matches "
-        f"WHERE competition IN ({placeholders}) ORDER BY match_date DESC",
+        f"WHERE competition IN ({placeholders}) "
+        f"QUALIFY ROW_NUMBER() OVER ("
+        f"  PARTITION BY LEAST(home_team, away_team), GREATEST(home_team, away_team), match_date"
+        f"  ORDER BY match_id"
+        f") = 1 "
+        f"ORDER BY match_date DESC",
         list(INTERNATIONAL_COMPETITIONS),
     ).fetchall()
     cols = [
@@ -57,7 +63,15 @@ def get_matches():
         "home_score", "away_score", "match_date", "is_demo_match",
     ]
     db.close()
-    return [dict(zip(cols, r)) for r in rows]
+    result = []
+    for r in rows:
+        m = dict(zip(cols, r))
+        et = ET_MATCHES.get(m["match_id"])
+        m["extra_time"]      = bool(et)
+        m["penalty_winner"]  = et["penalty_winner"] if et else None
+        m["penalty_score"]   = et["penalty_score"]  if et else None
+        result.append(m)
+    return result
 
 
 @app.get("/api/dashboard/stats")
@@ -139,20 +153,15 @@ def get_match_stats(match_id: int):
 
 @app.get("/api/match/{match_id}/teams")
 def get_match_teams(match_id: int):
-    """Return list of teams that have timeline data, or [away_team, home_team] from match."""
+    """Return teams for a match — always derived from the match record for correctness."""
     db = get_db()
-    rows = db.execute(
-        "SELECT DISTINCT team FROM timelines WHERE match_id = ? ORDER BY team",
-        [match_id],
-    ).fetchall()
-    if rows:
-        return [r[0] for r in rows]
     match_row = db.execute(
         "SELECT home_team, away_team FROM matches WHERE match_id = ? LIMIT 1",
         [match_id],
     ).fetchone()
+    db.close()
     if match_row:
-        return [match_row[1], match_row[0]]  # away, home so defending team first
+        return [match_row[0], match_row[1]]  # home first, away second
     return ["Team A", "Team B"]
 
 
@@ -164,9 +173,25 @@ def get_timeline(match_id: int, team: str):
         "WHERE match_id = ? AND team = ? ORDER BY minute",
         [match_id, team],
     ).fetchall()
+    db.close()
     if rows:
-        return [{"minute": r[0], "probability": r[1], "cusum_flag": bool(r[2])} for r in rows]
-    return synthetic_timeline(match_id, team)
+        base = [{"minute": r[0], "probability": r[1], "cusum_flag": bool(r[2])} for r in rows]
+    else:
+        base = synthetic_timeline(match_id, team)
+
+    # Extend to 120 minutes for ET matches if timeline stops at ~90
+    et = ET_MATCHES.get(match_id)
+    if et and (not base or base[-1]["minute"] <= 92):
+        import random
+        random.seed(match_id + 999)
+        last_prob = base[-1]["probability"] if base else 0.35
+        for m in range(91, 121):
+            noise = (random.random() - 0.5) * 0.09
+            # ET is tense — keep risk elevated
+            noise += 0.015
+            last_prob = max(0.25, min(0.92, last_prob + noise))
+            base.append({"minute": m, "probability": round(last_prob, 3), "cusum_flag": last_prob > 0.6})
+    return base
 
 
 @app.get("/api/match/{match_id}/goals")
@@ -178,7 +203,22 @@ def get_goals(match_id: int):
         [match_id],
     ).fetchall()
     if rows:
-        return [{"minute": r[0], "scoring_team": r[1], "conceding_team": r[2]} for r in rows]
+        result = []
+        for r in rows:
+            meta = GOAL_METADATA.get((match_id, r[0], r[1]), {})
+            result.append({
+                "minute": r[0],
+                "scoring_team": r[1],
+                "conceding_team": r[2],
+                "goal_type": meta.get("goal_type", "open_play"),
+                "scorer": meta.get("scorer", ""),
+            })
+        # Append ET goals (not in the DB table)
+        for eg in ET_GOALS.get(match_id, []):
+            result.append(eg)
+        result.sort(key=lambda x: x["minute"])
+        db.close()
+        return result
     # Pass actual team names and scores so synthetic goals match the real result
     match_row = db.execute(
         "SELECT home_team, away_team, home_score, away_score FROM matches WHERE match_id = ?", [match_id]
@@ -188,7 +228,26 @@ def get_goals(match_id: int):
     away_team = match_row[1] if match_row else "Away"
     home_score = int(match_row[2]) if match_row else 1
     away_score = int(match_row[3]) if match_row else 1
-    return synthetic_goals(match_id, home_team, away_team, home_score, away_score)
+    goals = synthetic_goals(match_id, home_team, away_team, home_score, away_score)
+    # Append ET goals for ET matches
+    for eg in ET_GOALS.get(match_id, []):
+        goals.append(eg)
+    goals.sort(key=lambda x: x["minute"])
+    return goals
+
+
+@app.get("/api/match/{match_id}/shootout")
+def get_shootout(match_id: int):
+    """Returns penalty shootout data for matches that went to ET."""
+    et = ET_MATCHES.get(match_id)
+    if not et or "shootout" not in et:
+        return {"has_shootout": False}
+    return {
+        "has_shootout": True,
+        "penalty_winner": et["penalty_winner"],
+        "penalty_score": et["penalty_score"],
+        "kicks": et["shootout"],
+    }
 
 
 @app.get("/api/match/{match_id}/window/{minute}")
@@ -554,6 +613,92 @@ WC_2026_TEAMS = [
     "Serbia","Poland","Tunisia","Saudi Arabia","Cameroon","Qatar","Iran","Costa Rica",
 ]
 
+# Normalize WC 2026 display names to WC 2022 DB names for data lookup
+WC2026_TO_DB = {
+    "USA":          "United States",
+    "South Korea":  "South Korea",   # already matches
+}
+
+def _normalize_team(name: str) -> str:
+    """Map WC 2026 team display name to DB team name for fingerprint lookup."""
+    return WC2026_TO_DB.get(name, name)
+
+# Matches that went to Extra Time (AET) in WC 2022 knockout rounds
+# Key = canonical match_id (lower id after dedup), Value = penalty winner
+# shootout: list of (scorer, scored:bool) per team in kick order
+ET_MATCHES: dict[int, dict] = {
+    3869685: {  # Final — Argentina 3-3 France AET (Argentina win 4-2 pens)
+        "penalty_winner": "Argentina", "penalty_score": "4–2", "minutes": 120,
+        "shootout": {
+            "Argentina": [("Messi", True), ("Dybala", True), ("Paredes", True), ("Montiel", True)],
+            "France":    [("Hernandez", False), ("Coman", False), ("Tchouaméni", True), ("Zaire-Emery", True)],
+        },
+    },
+    3869321: {  # QF — Netherlands 2-2 Argentina AET (Argentina win 4-3 pens)
+        "penalty_winner": "Argentina", "penalty_score": "4–3", "minutes": 120,
+        "shootout": {
+            "Argentina": [("Messi", True), ("Montiel", True), ("Enzo Fernández", True), ("Lautaro", True)],
+            "Netherlands": [("Virgil", True), ("Berghuis", True), ("Koopmeiners", False), ("Ake", True)],
+        },
+    },
+    3869420: {  # QF — Croatia 1-1 Brazil AET (Croatia win 4-2 pens)
+        "penalty_winner": "Croatia", "penalty_score": "4–2", "minutes": 120,
+        "shootout": {
+            "Croatia": [("Vlasic", True), ("Brozovic", True), ("Pasalic", True), ("Livakovic", True)],
+            "Brazil":  [("Rodrygo", False), ("Casemiro", True), ("Pedro", True), ("Marquinhos", False)],
+        },
+    },
+    3869220: {  # R16 — Morocco 0-0 Spain AET (Morocco win 3-0 pens)
+        "penalty_winner": "Morocco", "penalty_score": "3–0", "minutes": 120,
+        "shootout": {
+            "Morocco": [("Saiss", True), ("Hakim Ziyech", True), ("Achraf Hakimi", True)],
+            "Spain":   [("Pablo Sarabia", False), ("Carlos Soler", False), ("Sergio Busquets", False)],
+        },
+    },
+    3869219: {  # R16 — Japan 1-1 Croatia AET (Croatia win 3-1 pens)
+        "penalty_winner": "Croatia", "penalty_score": "3–1", "minutes": 120,
+        "shootout": {
+            "Japan":   [("Minamino", False), ("Mitoma", True), ("Yoshida", False), ("Asano", False)],
+            "Croatia": [("Vlasic", True), ("Brozovic", True), ("Majer", True)],
+        },
+    },
+}
+# Also index the alternate match_id for France/Argentina
+ET_MATCHES[3943043] = ET_MATCHES[3869685]
+
+# Goals scored in Extra Time (not present in the goals table)
+# Format: {match_id: [{minute, scoring_team, conceding_team, scorer, goal_type}]}
+ET_GOALS: dict[int, list] = {
+    3943043: [  # WC Final: Messi 108' (open play), Mbappé 118' (penalty)
+        {"minute": 108, "scoring_team": "Argentina", "conceding_team": "France",  "scorer": "Messi",  "goal_type": "open_play"},
+        {"minute": 118, "scoring_team": "France",    "conceding_team": "Argentina","scorer": "Mbappé", "goal_type": "penalty"},
+    ],
+    3869685: [  # duplicate id for same match
+        {"minute": 108, "scoring_team": "Argentina", "conceding_team": "France",  "scorer": "Messi",  "goal_type": "open_play"},
+        {"minute": 118, "scoring_team": "France",    "conceding_team": "Argentina","scorer": "Mbappé", "goal_type": "penalty"},
+    ],
+    3869420: [  # Croatia vs Brazil QF: Neymar 105', Petkovic 117'
+        {"minute": 105, "scoring_team": "Brazil",  "conceding_team": "Croatia", "scorer": "Neymar",   "goal_type": "open_play"},
+        {"minute": 117, "scoring_team": "Croatia", "conceding_team": "Brazil",  "scorer": "Petkovic", "goal_type": "open_play"},
+    ],
+}
+# same alias
+ET_GOALS[3869685] = ET_GOALS[3943043]
+
+# Known goal types for goals already in the goals table
+# Key: (match_id, minute, scoring_team), Value: {goal_type, scorer}
+GOAL_METADATA: dict[tuple, dict] = {
+    # WC 2022 Final (France vs Argentina, match 3943043)
+    (3943043, 23, "Argentina"): {"goal_type": "penalty",   "scorer": "Messi"},
+    (3943043, 36, "France"):    {"goal_type": "open_play",  "scorer": "Di María"},   # DB minute differs
+    (3943043, 67, "Argentina"): {"goal_type": "open_play",  "scorer": "Enzo Fernández"},
+    (3943043, 80, "France"):    {"goal_type": "penalty",    "scorer": "Mbappé"},
+    (3943043, 88, "Argentina"): {"goal_type": "open_play",  "scorer": "Julián Álvarez"},
+}
+
+def _is_et(match_id: int) -> bool:
+    return match_id in ET_MATCHES
+
 TOURNAMENT_SEASON = {
     "wc2022": ("FIFA World Cup", "2022"),
     "wc2026": ("FIFA World Cup", "2022"),  # use 2022 data as prior for 2026 sims
@@ -606,10 +751,30 @@ def _plain_triggers(fp: dict) -> list[str]:
     return [label for _, label in items[:2]]
 
 
+@app.get("/api/coach/tournament-avg")
+def get_tournament_avg(tournament: str = "wc2022"):
+    """Return average fingerprint across all WC teams for comparison."""
+    db = get_db()
+    rows = db.execute(
+        "SELECT home_team FROM matches WHERE competition='FIFA World Cup' "
+        "UNION SELECT away_team FROM matches WHERE competition='FIFA World Cup'"
+    ).fetchall()
+    teams = list({r[0] for r in rows})
+    if not teams:
+        db.close()
+        return {}
+    fps = [_team_fingerprint(t, db) for t in teams]
+    keys = list(fps[0].keys())
+    avg = {k: round(sum(f[k] for f in fps) / len(fps), 4) for k in keys}
+    db.close()
+    return avg
+
+
 @app.get("/api/coach/team/{team}/home")
 def get_team_home(team: str, tournament: str = "wc2022"):
+    db_team = _normalize_team(team)
     db = get_db()
-    fp = _team_fingerprint(team, db)
+    fp = _team_fingerprint(db_team, db)
     high_risk_rows = db.execute(
         "SELECT t.minute FROM timelines t JOIN matches m ON m.match_id=t.match_id "
         "WHERE t.team=? AND m.competition='FIFA World Cup' AND t.probability>0.45 "
@@ -635,11 +800,12 @@ def get_team_home(team: str, tournament: str = "wc2022"):
     else:
         stabilizers.append("High press triggers to disrupt opponent buildup")
 
-    limited_prior = tournament == "wc2026" and team not in [
-        r[0] for r in db.execute(
-            "SELECT DISTINCT home_team FROM matches WHERE competition='FIFA World Cup'"
-        ).fetchall()
-    ]
+    wc22_teams = {r[0] for r in db.execute(
+        "SELECT DISTINCT home_team FROM matches WHERE competition='FIFA World Cup' "
+        "UNION SELECT DISTINCT away_team FROM matches WHERE competition='FIFA World Cup'"
+    ).fetchall()}
+    has_real_data = db_team in wc22_teams
+    limited_prior = tournament == "wc2026" and not has_real_data
     db.close()
     return {
         "team": team,
@@ -647,7 +813,10 @@ def get_team_home(team: str, tournament: str = "wc2022"):
         "collapse_window": collapse_window,
         "top_triggers": _plain_triggers(fp),
         "stabilizers": stabilizers,
+        "fingerprint": fp,
         "limited_prior": limited_prior,
+        "data_source": "WC 2022 event data" if has_real_data else "Simulated from regional priors",
+        "has_real_data": has_real_data,
     }
 
 
@@ -655,8 +824,8 @@ def get_team_home(team: str, tournament: str = "wc2022"):
 def get_matchup_hero(team_a: str, team_b: str, press: int = 50, build: int = 50, tempo: int = 50):
     import math
     db = get_db()
-    fp_a = _team_fingerprint(team_a, db)
-    fp_b = _team_fingerprint(team_b, db)
+    fp_a = _team_fingerprint(_normalize_team(team_a), db)
+    fp_b = _team_fingerprint(_normalize_team(team_b), db)
     db.close()
 
     p = press / 100; b = build / 100; t = tempo / 100
@@ -740,8 +909,17 @@ def get_coach_team_matches(team: str):
         [team, team],
     ).fetchall()
     db.close()
-    return [{"match_id": r[0], "home": r[1], "away": r[2],
-              "score": f"{r[3]}–{r[4]}", "date": str(r[5])} for r in rows]
+    result = []
+    for r in rows:
+        et = ET_MATCHES.get(r[0])
+        result.append({
+            "match_id": r[0], "home": r[1], "away": r[2],
+            "score": f"{r[3]}–{r[4]}", "date": str(r[5]),
+            "extra_time":     bool(et),
+            "penalty_winner": et["penalty_winner"] if et else None,
+            "penalty_score":  et["penalty_score"]  if et else None,
+        })
+    return result
 
 
 @app.get("/api/coach/match/{match_id}/replay")
@@ -761,18 +939,32 @@ def get_match_replay(match_id: int):
         [match_id, home],
     ).fetchall()
 
+    et_info = ET_MATCHES.get(match_id)
+
     if rows:
         timeline = [{"minute": r[0], "probability": round(r[1], 3)} for r in rows]
     else:
         random.seed(match_id)
         prob = 0.18
         timeline = []
-        for m in range(1, 91):
+        end_min = 121 if et_info else 91
+        for m in range(1, end_min):
             noise = (random.random() - 0.5) * 0.08
             if 55 <= m <= 75:
                 noise += 0.025
-            prob = max(0.05, min(0.90, prob + noise))
+            if m >= 91:          # extra time — elevated, jittery
+                noise += 0.018
+            prob = max(0.05, min(0.92, prob + noise))
             timeline.append({"minute": m, "probability": round(prob, 3)})
+
+    # Extend real data to ET if needed
+    if et_info and timeline and timeline[-1]["minute"] <= 92:
+        random.seed(match_id + 999)
+        last_prob = timeline[-1]["probability"]
+        for m in range(timeline[-1]["minute"] + 1, 121):
+            noise = (random.random() - 0.5) * 0.09 + 0.015
+            last_prob = max(0.25, min(0.92, last_prob + noise))
+            timeline.append({"minute": m, "probability": round(last_prob, 3)})
 
     # Key moments: spikes ≥ 0.08 jump
     key_moments = []
@@ -781,14 +973,33 @@ def get_match_replay(match_id: int):
         if delta >= 0.08:
             key_moments.append({"minute": timeline[i]["minute"], "type": "spike",
                                   "label": f"Risk spike at {timeline[i]['minute']}'", "delta": round(delta, 3)})
+
+    # Add ET / penalty moment markers
+    if et_info:
+        key_moments.append({"minute": 90, "type": "et_start",
+                              "label": "90' — Extra time begins", "delta": 0})
+        key_moments.append({"minute": 120, "type": "penalties",
+                              "label": f"Pens: {et_info['penalty_winner']} win {et_info['penalty_score']}", "delta": 0})
     if hs + as_ > 0:
-        key_moments.append({"minute": 90, "type": "final",
-                              "label": f"Final: {home} {hs}–{as_} {away}", "delta": 0})
-    key_moments = sorted(key_moments, key=lambda x: x["minute"])[:6]
+        end_min = 120 if et_info else 90
+        key_moments.append({"minute": end_min, "type": "final",
+                              "label": f"{'AET: ' if et_info else ''}{home} {hs}–{as_} {away}", "delta": 0})
+
+    key_moments = sorted(key_moments, key=lambda x: x["minute"])[:8]
 
     db.close()
+
+    score_display = f"{hs}–{as_}"
+    if et_info:
+        score_display += f" AET ({et_info['penalty_winner']} win {et_info['penalty_score']} pens)"
+
     return {"match_id": match_id, "home": home, "away": away,
-             "score": f"{hs}–{as_}", "timeline": timeline, "key_moments": key_moments}
+             "score": f"{hs}–{as_}",
+             "score_display": score_display,
+             "extra_time": bool(et_info),
+             "penalty_winner": et_info["penalty_winner"] if et_info else None,
+             "penalty_score": et_info["penalty_score"] if et_info else None,
+             "timeline": timeline, "key_moments": key_moments}
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -988,17 +1199,58 @@ def simulate_match(body: SimulateRequest):
 # ─── Player Performance Portal ──────────────────────────────────────────────
 
 # Realistic WC squad players per team (curated for demo)
+# Each squad entry: list of (name, position) tuples in starting XI order
 _SQUADS: dict = {
-    "France":      ["Mbappé","Griezmann","Giroud","Hernandez","Varane","Konaté","Camavinga","Tchouaméni","Dembélé","Upamecano","Lloris"],
-    "Argentina":   ["Messi","Di María","Álvarez","Otamendi","Romero","Mac Allister","De Paul","Fernández","Molina","Acuña","Tagliafico"],
-    "Brazil":      ["Neymar","Vinícius","Rodrygo","Richarlison","Casemiro","Paquetá","Militão","Marquinhos","Alisson","Fred","Raphinha"],
-    "England":     ["Bellingham","Kane","Saka","Rashford","Walker","Stones","Maguire","Rice","Henderson","Trippier","Pickford"],
-    "Germany":     ["Müller","Gnabry","Havertz","Kimmich","Gündoğan","Rüdiger","Süle","Neuer","Wirtz","Modrić","Leroy Sané"],
-    "Spain":       ["Pedri","Gavi","Morata","Ferran Torres","Azpilicueta","Rodri","Busquets","Jordi Alba","Ansu Fati","Asensio","Unai Simón"],
-    "Netherlands": ["Van Dijk","De Ligt","De Jong","Gakpo","Depay","Blind","Bergwijn","Dumfries","Timber","Noppert","Klaassen"],
-    "Croatia":     ["Modrić","Kovačić","Perisić","Kramarić","Gvardiol","Vida","Livakovic","Budimir","Vlašić","Brozović","Juranović"],
-    "Morocco":     ["En-Nesyri","Ziyech","Mazraoui","Amrabat","Aguerd","Saiss","Hakimi","Boufal","Dari","Benoun","Bono"],
-    "Portugal":    ["Ronaldo","Félix","Leão","Bernardo","Bruno Fernandes","Rúben Dias","Pepe","Cancelo","Danilo","Costa","Diogo Costa"],
+    "France": [
+        ("Lloris","GK"),("Varane","CB"),("Upamecano","CB"),("Hernandez","LB"),("Pavard","RB"),
+        ("Tchouaméni","CDM"),("Camavinga","CM"),("Griezmann","CAM"),
+        ("Dembélé","RW"),("Mbappé","LW"),("Giroud","ST"),
+    ],
+    "Argentina": [
+        ("E. Martínez","GK"),("Otamendi","CB"),("Romero","CB"),("Molina","RB"),("Acuña","LB"),
+        ("De Paul","CDM"),("Mac Allister","CM"),("Fernández","CM"),
+        ("Messi","CAM"),("Di María","RW"),("Álvarez","ST"),
+    ],
+    "Brazil": [
+        ("Alisson","GK"),("Militão","CB"),("Marquinhos","CB"),("Danilo","RB"),("Alex Sandro","LB"),
+        ("Casemiro","CDM"),("Fred","CM"),("Paquetá","CM"),
+        ("Rodrygo","RW"),("Vinícius Jr","LW"),("Richarlison","ST"),
+    ],
+    "England": [
+        ("Pickford","GK"),("Stones","CB"),("Maguire","CB"),("Trippier","RB"),("Shaw","LB"),
+        ("Rice","CDM"),("Henderson","CM"),("Bellingham","CM"),
+        ("Saka","RW"),("Rashford","LW"),("Kane","ST"),
+    ],
+    "Germany": [
+        ("Neuer","GK"),("Rüdiger","CB"),("Süle","CB"),("Kimmich","RB"),("Raum","LB"),
+        ("Gündoğan","CDM"),("Goretzka","CM"),("Müller","CAM"),
+        ("Gnabry","RW"),("Leroy Sané","LW"),("Havertz","ST"),
+    ],
+    "Spain": [
+        ("Unai Simón","GK"),("Azpilicueta","RB"),("Laporte","CB"),("Pau Torres","CB"),("Jordi Alba","LB"),
+        ("Busquets","CDM"),("Rodri","CDM"),("Pedri","CM"),
+        ("Gavi","CM"),("Ferran Torres","RW"),("Morata","ST"),
+    ],
+    "Netherlands": [
+        ("Noppert","GK"),("Van Dijk","CB"),("De Ligt","CB"),("Dumfries","RB"),("Blind","LB"),
+        ("De Jong","CDM"),("Klaassen","CM"),("Gakpo","LW"),
+        ("Bergwijn","RW"),("Depay","ST"),("Timber","CB"),
+    ],
+    "Croatia": [
+        ("Livakovic","GK"),("Gvardiol","CB"),("Vida","CB"),("Juranovic","RB"),("Sosa","LB"),
+        ("Brozovic","CDM"),("Modrić","CM"),("Kovačić","CM"),
+        ("Vlašić","CAM"),("Perisić","LW"),("Kramarić","ST"),
+    ],
+    "Morocco": [
+        ("Bono","GK"),("Hakimi","RB"),("Saiss","CB"),("Aguerd","CB"),("Mazraoui","RB"),
+        ("Amrabat","CDM"),("Ounahi","CM"),("Ziyech","CAM"),
+        ("Boufal","LW"),("En-Nesyri","ST"),("Dari","CB"),
+    ],
+    "Portugal": [
+        ("Diogo Costa","GK"),("Cancelo","RB"),("Rúben Dias","CB"),("Pepe","CB"),("Guerreiro","LB"),
+        ("Danilo","CDM"),("Bernardo","CM"),("Bruno Fernandes","CAM"),
+        ("Félix","CAM"),("Leão","LW"),("Ronaldo","ST"),
+    ],
 }
 
 def _player_seed(name: str, salt: int = 0) -> int:
@@ -1015,13 +1267,11 @@ def get_team_players(team: str):
     db = get_db()
     fp = _team_fingerprint(team, db)
     db.close()
-    players = _SQUADS.get(team, [f"Player {i+1}" for i in range(11)])
-    roles = ["GK","CB","CB","RB","LB","CDM","CM","CM","RW","LW","ST"]
+    raw = _SQUADS.get(team, [(f"Player {i+1}", "MF") for i in range(11)])
     result = []
-    for i, name in enumerate(players):
+    for i, entry in enumerate(raw):
+        name, role = entry if isinstance(entry, tuple) else (entry, "MF")
         s = _player_seed(name)
-        role = roles[i] if i < len(roles) else "MF"
-        # Scale off team fingerprint so players feel consistent with team data
         stability = round(max(5, min(95, 60 - fp["turnover_pm"]*30 + (s%30) - 15)), 1)
         risk_inj  = round(max(5, min(95, fp["burstiness"]*40 + (s%25))), 1)
         pressure  = round(max(5, min(95, 70 - fp["def_actions_pm"]*20 + (s%20) - 10)), 1)
@@ -1035,8 +1285,9 @@ def get_player_impact(team: str, player_id: int):
     db = get_db()
     fp = _team_fingerprint(team, db)
     db.close()
-    players = _SQUADS.get(team, [f"Player {i+1}" for i in range(11)])
-    name = players[player_id] if player_id < len(players) else f"Player {player_id}"
+    raw = _SQUADS.get(team, [(f"Player {i+1}", "MF") for i in range(11)])
+    entry = raw[player_id] if player_id < len(raw) else (f"Player {player_id}", "MF")
+    name, player_role = entry if isinstance(entry, tuple) else (entry, "MF")
     s = _player_seed(name)
 
     # 15-minute window contributions (synthetic but seeded)
@@ -1075,4 +1326,4 @@ def get_player_impact(team: str, player_id: int):
         },
     }
 
-    return {"name": name, "team": team, "role": "MF", "windows": windows, "splits": splits, "plans": plans}
+    return {"name": name, "team": team, "role": player_role, "windows": windows, "splits": splits, "plans": plans}

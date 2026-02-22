@@ -6,8 +6,8 @@ import {
 } from 'recharts';
 import { ShieldAlert, Timer, ArrowLeft, Search, Sparkles, Swords, Trophy, ChevronRight } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { getTimeline, getGoals, getWindow, getMatches, getMatchTeams, getCoachSuggestions } from '../../lib/api';
-import type { Match, MatchWindow } from '../../lib/types';
+import { getTimeline, getGoals, getWindow, getMatches, getMatchTeams, getCoachSuggestions, getShootout } from '../../lib/api';
+import type { Match, MatchWindow, GoalType } from '../../lib/types';
 import { useMatch } from '../context/MatchContext';
 import { Skeleton } from '../components/ui/skeleton';
 
@@ -30,6 +30,16 @@ function getFeatureValue(w: MatchWindow, key: string): number {
   const v = w.features[key as keyof typeof w.features];
   if (v == null) return 0;
   return Math.round(Math.min(100, Math.max(0, v * 100)));
+}
+
+function goalTypeConfig(type: GoalType | undefined) {
+  switch (type) {
+    case 'penalty':          return { color: '#f59e0b', icon: 'P', label: 'Penalty', bg: 'bg-amber-500/15 border-amber-500/30 text-amber-400' };
+    case 'direct_free_kick': return { color: '#10b981', icon: 'FK', label: 'Free Kick', bg: 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400' };
+    case 'header':           return { color: '#8b5cf6', icon: 'H', label: 'Header', bg: 'bg-violet-500/15 border-violet-500/30 text-violet-400' };
+    case 'own_goal':         return { color: '#64748b', icon: 'OG', label: 'Own Goal', bg: 'bg-slate-500/15 border-slate-500/30 text-slate-400' };
+    default:                 return { color: '#ef4444', icon: '⚽', label: 'Open Play', bg: 'bg-red-500/15 border-red-500/30 text-red-400' };
+  }
 }
 
 export function WarRoom() {
@@ -58,6 +68,12 @@ export function WarRoom() {
     queryKey: ['timeline', matchId, team],
     queryFn: () => getTimeline(matchId, team),
     enabled: !!matchId && !!team,
+  });
+
+  const { data: shootout } = useQuery({
+    queryKey: ['shootout', matchId],
+    queryFn: () => getShootout(matchId),
+    enabled: !!matchId && !!(match?.extra_time || pickerMatch?.extra_time),
   });
 
   const { data: goals = [] } = useQuery({
@@ -239,17 +255,27 @@ export function WarRoom() {
                                       {m.away_team}
                                     </span>
                                   </div>
-                                  {m.match_date && (
-                                    <p className="text-[10px] text-collapse-dim mt-0.5 font-mono">{String(m.match_date)}</p>
-                                  )}
+                                  <div className="flex items-center gap-2 mt-0.5">
+                                    {m.match_date && (
+                                      <p className="text-[10px] text-collapse-dim font-mono">{String(m.match_date)}</p>
+                                    )}
+                                    {m.extra_time && (
+                                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-500/30 uppercase tracking-wide">AET</span>
+                                    )}
+                                  </div>
                                 </div>
                               </div>
                               <div className="flex items-center gap-2 shrink-0 ml-3">
-                                <span className={`font-mono text-sm font-bold ${
-                                  isHighScoring ? 'text-collapse-warn' : isSelected ? 'text-collapse-accent' : 'text-collapse-muted'
-                                }`}>
-                                  {score}
-                                </span>
+                                <div className="text-right">
+                                  <span className={`font-mono text-sm font-bold ${
+                                    isHighScoring ? 'text-collapse-warn' : isSelected ? 'text-collapse-accent' : 'text-collapse-muted'
+                                  }`}>
+                                    {score}
+                                  </span>
+                                  {m.extra_time && m.penalty_winner && (
+                                    <p className="text-[9px] text-amber-400 font-mono">{m.penalty_winner} win pens</p>
+                                  )}
+                                </div>
                                 <ChevronRight className={`w-4 h-4 transition-all ${
                                   isSelected ? 'text-collapse-accent translate-x-0.5' : 'text-collapse-dim opacity-0 group-hover:opacity-100'
                                 }`} />
@@ -302,9 +328,16 @@ export function WarRoom() {
                     <p className="font-bold text-lg">
                       {pickerMatch.home_team} <span className="text-collapse-muted font-normal text-base">vs</span> {pickerMatch.away_team}
                     </p>
-                    <p className="text-collapse-muted text-sm font-mono mt-0.5">
-                      Final score: <span className="text-collapse-text font-bold">{pickerMatch.home_score ?? '?'} – {pickerMatch.away_score ?? '?'}</span>
-                      {pickerMatch.match_date && <span className="ml-3 text-collapse-dim">· {String(pickerMatch.match_date)}</span>}
+                    <p className="text-collapse-muted text-sm font-mono mt-0.5 flex items-center gap-2 flex-wrap">
+                      Final score:&nbsp;
+                      <span className="text-collapse-text font-bold">{pickerMatch.home_score ?? '?'} – {pickerMatch.away_score ?? '?'}</span>
+                      {pickerMatch.extra_time && (
+                        <span className="text-xs font-bold px-2 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-500/30 uppercase tracking-wide">AET</span>
+                      )}
+                      {pickerMatch.extra_time && pickerMatch.penalty_winner && (
+                        <span className="text-amber-400 font-sans">· {pickerMatch.penalty_winner} win {pickerMatch.penalty_score} pens</span>
+                      )}
+                      {pickerMatch.match_date && <span className="text-collapse-dim">· {String(pickerMatch.match_date)}</span>}
                     </p>
                   </div>
 
@@ -410,9 +443,9 @@ export function WarRoom() {
         <div className="flex items-center gap-3">
           <button
             onClick={() => setMatch(null, '')}
-            className="px-4 py-2 bg-collapse-surface border border-collapse-border rounded-lg text-sm font-semibold text-collapse-text hover:border-collapse-accent hover:text-collapse-accent transition-all flex items-center gap-2"
+            className="px-4 py-2 bg-collapse-surface border border-collapse-border rounded-xl text-sm font-semibold text-collapse-text hover:border-collapse-accent hover:text-collapse-accent transition-all flex items-center gap-2"
           >
-            <ArrowLeft className="w-4 h-4" /> Change Match
+            <ArrowLeft className="w-4 h-4" /> Back to matches
           </button>
           <div className={`px-3 py-1 rounded text-xs font-bold uppercase tracking-wide flex items-center gap-2 transition-all ${
             currentRisk > 0.65
@@ -477,10 +510,20 @@ export function WarRoom() {
                   />
                   {/* 65% danger zone */}
                   <ReferenceLine y={65} stroke="#ef4444" strokeDasharray="4 4" label={{ value: 'High Risk', fill: '#ef4444', fontSize: 10 }} />
-                  {/* Goal markers */}
-                  {goals.map((g) => (
-                    <ReferenceLine key={`goal-${g.minute}`} x={g.minute} stroke="#ef4444" strokeWidth={2} label={{ value: '⚽', position: 'top', fontSize: 12 }} />
-                  ))}
+                  {/* Extra time boundary */}
+                  {(match?.extra_time || pickerMatch?.extra_time) && (
+                    <ReferenceLine x={90} stroke="#f59e0b" strokeWidth={1.5} strokeDasharray="5 3"
+                      label={{ value: 'ET', fill: '#f59e0b', fontSize: 10, position: 'insideTopLeft' }} />
+                  )}
+                  {/* Goal markers — color by type */}
+                  {goals.map((g, gi) => {
+                    const cfg = goalTypeConfig(g.goal_type);
+                    const labelVal = g.goal_type === 'penalty' ? '⚽P' : g.goal_type === 'direct_free_kick' ? '⚽FK' : g.goal_type === 'header' ? '⚽H' : g.goal_type === 'own_goal' ? 'OG' : '⚽';
+                    return (
+                      <ReferenceLine key={`goal-${gi}`} x={g.minute} stroke={cfg.color} strokeWidth={2}
+                        label={{ value: labelVal, position: 'top', fontSize: 10, fill: cfg.color }} />
+                    );
+                  })}
                   {/* CUSUM alert markers */}
                   {cusumMinutes.map((m) => (
                     <ReferenceLine key={`cusum-${m}`} x={m} stroke="#10b981" strokeDasharray="3 3" strokeWidth={1.5} />
@@ -512,7 +555,12 @@ export function WarRoom() {
               onChange={(e) => setCurrentMinute(parseInt(e.target.value, 10))}
               className="flex-1 h-2 bg-collapse-bg rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:bg-collapse-accent [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:shadow-lg hover:[&::-webkit-slider-thumb]:scale-110 transition-all"
             />
-            <span className="font-mono text-sm text-collapse-muted w-12">{maxMinute}'+</span>
+            <span className="font-mono text-sm text-collapse-muted w-12">
+              {maxMinute}'
+              {(match?.extra_time || pickerMatch?.extra_time) && (
+                <span className="text-amber-400 text-[9px] block leading-none">AET</span>
+              )}
+            </span>
             <div className="px-3 py-1 bg-collapse-accent text-white font-mono text-sm rounded min-w-[3rem] text-center">
               {currentMinute}'
             </div>
@@ -679,6 +727,54 @@ export function WarRoom() {
                );
              })()}
           </div>
+
+          {/* Goals list */}
+          {goals.length > 0 && (
+            <div>
+              <h3 className="text-xs font-bold uppercase tracking-wider text-collapse-muted mb-2">Goals</h3>
+              <div className="space-y-1.5">
+                {goals.map((g, i) => {
+                  const cfg = goalTypeConfig(g.goal_type);
+                  const isET = g.minute > 90;
+                  return (
+                    <div key={i} className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg border text-xs font-medium ${cfg.bg}`}>
+                      <span className="font-black font-mono w-9 shrink-0">{g.minute}'</span>
+                      {isET && <span className="text-[8px] font-bold bg-amber-500/20 text-amber-400 px-1 rounded shrink-0">ET</span>}
+                      <span className="font-bold shrink-0">{g.scoring_team.slice(0,3).toUpperCase()}</span>
+                      {g.scorer && <span className="opacity-80 truncate">{g.scorer}</span>}
+                      <span className="ml-auto text-[9px] uppercase tracking-wide opacity-60 shrink-0">{cfg.label}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Penalty Shootout */}
+          {shootout?.has_shootout && shootout.kicks && (
+            <div className="border border-amber-500/30 rounded-xl p-3 bg-amber-500/5">
+              <div className="flex items-center gap-2 mb-2">
+                <Trophy className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                <h4 className="text-[10px] font-bold uppercase tracking-wider text-amber-400">Penalty Shootout</h4>
+                <span className="ml-auto text-[10px] font-black text-amber-300 font-mono">{shootout.penalty_winner} {shootout.penalty_score}</span>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                {Object.entries(shootout.kicks).map(([teamName, kicks]) => (
+                  <div key={teamName}>
+                    <p className="text-[9px] font-bold text-collapse-muted uppercase mb-1">{teamName}</p>
+                    <div className="space-y-0.5">
+                      {(kicks as [string, boolean][]).map(([scorer, scored], ki) => (
+                        <div key={ki} className={`flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded ${scored ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400 line-through opacity-70'}`}>
+                          <span className="font-black shrink-0">{scored ? '✓' : '✗'}</span>
+                          <span className="truncate">{scorer}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

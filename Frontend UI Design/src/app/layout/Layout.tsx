@@ -1,4 +1,4 @@
-import { Outlet, useLocation, Link } from "react-router";
+import { Outlet, useLocation, Link, useNavigate } from "react-router";
 import { NavLink } from "../components/router-components";
 import { 
   LayoutDashboard, 
@@ -7,6 +7,7 @@ import {
   Settings, 
   Menu,
   ChevronRight,
+  ChevronLeft,
   Swords,
   BrainCircuit,
   Users,
@@ -19,6 +20,8 @@ import { motion, AnimatePresence } from "motion/react";
 export function Layout() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const location = useLocation();
+  const navigate = useNavigate();
+  const isHome = location.pathname === '/';
 
   return (
     <div className="flex h-screen bg-collapse-bg text-collapse-text overflow-hidden font-sans">
@@ -70,18 +73,28 @@ export function Layout() {
       <main className="flex-1 flex flex-col min-w-0 overflow-hidden bg-collapse-bg relative">
         {/* Header */}
         <header className="h-16 bg-collapse-bg/80 backdrop-blur-md border-b border-collapse-border flex items-center justify-between px-6 sticky top-0 z-10 shrink-0">
-          <div className="flex items-center gap-4 text-collapse-muted">
+          <div className="flex items-center gap-3 text-collapse-muted">
              <Menu className="lg:hidden w-6 h-6 cursor-pointer" onClick={() => setIsSidebarOpen(!isSidebarOpen)} />
+             {/* Back button — shown on all non-home pages */}
+             {!isHome && (
+               <button
+                 onClick={() => navigate(-1)}
+                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-collapse-border bg-collapse-surface hover:border-collapse-accent hover:text-collapse-accent transition-all text-sm font-medium"
+               >
+                 <ChevronLeft className="w-4 h-4" />
+                 Back
+               </button>
+             )}
              <div className="hidden md:flex items-center gap-2 text-sm">
                 <Link to="/" className="text-collapse-muted hover:text-collapse-accent transition-colors">Home</Link>
-                <ChevronRight className="w-4 h-4" />
-                <span className="text-collapse-text font-medium">
-                  {location.pathname === '/'
-                    ? 'Dashboard'
-                    : location.pathname === '/wc-2026'
-                    ? 'WC 2026'
-                    : location.pathname.slice(1).replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
-                </span>
+                {!isHome && <ChevronRight className="w-3.5 h-3.5" />}
+                {!isHome && (
+                  <span className="text-collapse-text font-medium">
+                    {location.pathname === '/wc-2026'
+                      ? 'WC 2026'
+                      : location.pathname.slice(1).replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
+                  </span>
+                )}
              </div>
           </div>
         </header>

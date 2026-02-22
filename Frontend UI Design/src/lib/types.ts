@@ -29,10 +29,14 @@ export interface MatchWindow {
   driver_3: string
 }
 
+export type GoalType = 'open_play' | 'penalty' | 'direct_free_kick' | 'header' | 'own_goal'
+
 export interface GoalMarker {
   minute: number
   scoring_team: string
   conceding_team: string
+  goal_type?: GoalType
+  scorer?: string
 }
 
 export interface CounterfactualPoint {
@@ -76,6 +80,9 @@ export interface Match {
   away_score: number
   match_date: string
   is_demo_match: boolean
+  extra_time?: boolean
+  penalty_winner?: string | null
+  penalty_score?: string | null
 }
 
 export interface WC2026Venue {

@@ -64,9 +64,17 @@ def synthetic_timeline(match_id: int, team: str, num_minutes: int = 96):
     return out
 
 
+GOAL_TYPES = ["open_play", "penalty", "direct_free_kick", "open_play", "open_play", "header"]
+SYNTH_SCORERS = [
+    "Silva", "Torres", "Guedes", "Trincão", "Diogo Jota",
+    "Kane", "Bellingham", "Saka", "Foden", "Rashford",
+    "Müller", "Gnabry", "Havertz", "Werner", "Kimmich",
+]
+
+
 def synthetic_goals(match_id: int, home_team: str = "Home", away_team: str = "Away",
                     home_score: int = 1, away_score: int = 1):
-    """Generate exactly home_score + away_score goals at deterministic minutes."""
+    """Generate exactly home_score + away_score goals with deterministic minutes and types."""
     s = _seed(match_id, "goals")
     minute_pool = [
         10 + s % 8, 22 + s % 10, 34 + s % 7, 44 + (s // 3) % 8,
@@ -75,11 +83,15 @@ def synthetic_goals(match_id: int, home_team: str = "Home", away_team: str = "Aw
     home_goals, away_goals = [], []
     home_left, away_left = home_score, away_score
     for i, minute in enumerate(minute_pool):
+        goal_type = GOAL_TYPES[(s + i * 13) % len(GOAL_TYPES)]
+        scorer = SYNTH_SCORERS[(s + i * 7) % len(SYNTH_SCORERS)]
         if home_left > 0 and (i % 2 == 0 or away_left == 0):
-            home_goals.append({"minute": minute, "scoring_team": home_team, "conceding_team": away_team})
+            home_goals.append({"minute": minute, "scoring_team": home_team,
+                                "conceding_team": away_team, "goal_type": goal_type, "scorer": scorer})
             home_left -= 1
         elif away_left > 0:
-            away_goals.append({"minute": minute, "scoring_team": away_team, "conceding_team": home_team})
+            away_goals.append({"minute": minute, "scoring_team": away_team,
+                                "conceding_team": home_team, "goal_type": goal_type, "scorer": scorer})
             away_left -= 1
         if home_left == 0 and away_left == 0:
             break
