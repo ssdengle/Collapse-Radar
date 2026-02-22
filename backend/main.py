@@ -1817,6 +1817,249 @@ def get_player_impact(team: str, player_id: int):
     return {"name": name, "team": team, "role": player_role, "windows": windows, "splits": splits, "plans": plans}
 
 
+# ── Player Trajectory ─────────────────────────────────────────────────────
+@app.get("/api/player/trajectory")
+def get_player_trajectory(player: str, team: str):
+    """
+    Per-match performance trajectory for a player using real pass_nodes + timelines data.
+    Derives resilience (performance under high-risk) and collapse contribution
+    (fatigue + low-influence during risk spikes) for each WC match.
+    Falls back to seeded synthetic data if the player has no DB records.
+    """
+    import numpy as np
+
+    db = get_db()
+
+    # ── 1. Fetch per-match aggregates from pass_nodes ─────────────────────
+    # Group all minutes the player appears across WC matches into per-match buckets
+    real_rows = db.execute(
+        """
+        SELECT
+            p.match_id,
+            m.home_team, m.away_team, m.home_score, m.away_score, m.match_date,
+            AVG(p.influence_score)  AS avg_influence,
+            AVG(p.fatigue_score)    AS avg_fatigue,
+            AVG(p.centrality)       AS avg_centrality,
+            MAX(p.fatigue_score)    AS peak_fatigue,
+            MIN(p.fatigue_score)    AS min_fatigue,
+            COUNT(DISTINCT p.minute) AS minutes_present
+        FROM pass_nodes p
+        JOIN matches m ON m.match_id = p.match_id
+        WHERE p.player = ?
+          AND (m.home_team = ? OR m.away_team = ?)
+          AND m.competition = 'FIFA World Cup'
+        GROUP BY p.match_id, m.home_team, m.away_team,
+                 m.home_score, m.away_score, m.match_date
+        ORDER BY m.match_date
+        """,
+        [player, team, team],
+    ).fetchall()
+
+    real_data_found = len(real_rows) > 0
+
+    # ── 2. For each match, get risk correlation from timelines ────────────
+    match_records = []
+
+    def _pressure_perf(match_id: int, avg_inf: float, avg_fat: float) -> tuple[float, float]:
+        """Return (performance_under_pressure, collapse_contribution)."""
+        risk_rows = db.execute(
+            "SELECT minute, probability FROM timelines WHERE match_id = ? AND team = ? ORDER BY minute",
+            [match_id, team],
+        ).fetchall()
+        if not risk_rows:
+            return round(avg_inf, 3), round(1.0 - avg_inf, 3)
+
+        high_risk = [r for r in risk_rows if r[1] >= 0.50]
+        if not high_risk:
+            # No high-risk phase → player had nothing difficult to face
+            return round(min(0.95, avg_inf + 0.08), 3), round(max(0.02, (1.0 - avg_inf) * 0.4), 3)
+
+        # In high-risk minutes: get player node data
+        high_risk_minutes = [r[0] for r in high_risk]
+        placeholders = ",".join("?" for _ in high_risk_minutes)
+        node_rows = db.execute(
+            f"SELECT influence_score, fatigue_score FROM pass_nodes "
+            f"WHERE match_id = ? AND player = ? AND minute IN ({placeholders})",
+            [match_id, player] + high_risk_minutes,
+        ).fetchall()
+
+        if not node_rows:
+            # Player data not available for risky minutes — use overall as proxy
+            pressure_perf = round(avg_inf * 0.9, 3)
+            collapse_contrib = round(avg_fat * 0.5, 3)
+        else:
+            pressure_inf = sum(r[0] for r in node_rows if r[0] is not None) / len(node_rows)
+            pressure_fat = sum(r[1] for r in node_rows if r[1] is not None) / len(node_rows)
+            # Resilience: maintained high influence in risky phases
+            pressure_perf = round(float(np.clip(pressure_inf, 0.0, 1.0)), 3)
+            # Collapse contribution: high fatigue + low influence during spikes
+            collapse_contrib = round(float(np.clip(pressure_fat * (1.0 - pressure_inf), 0.0, 1.0)), 3)
+
+        return pressure_perf, collapse_contrib
+
+    if real_data_found:
+        for r in real_rows:
+            mid, ht, at, hs, as_, mdate, avg_inf, avg_fat, avg_cent, pk_fat, mn_fat, mins = r
+            avg_inf  = float(avg_inf  or 0.5)
+            avg_fat  = float(avg_fat  or 0.4)
+            avg_cent = float(avg_cent or 0.3)
+            pk_fat   = float(pk_fat   or avg_fat)
+
+            opponent  = at if ht == team else ht
+            goal_diff = (hs - as_) if ht == team else (as_ - hs)
+            result    = "W" if goal_diff > 0 else ("D" if goal_diff == 0 else "L")
+            score_str = f"{hs}–{as_}"
+
+            pperf, cc = _pressure_perf(mid, avg_inf, avg_fat)
+
+            # Resilience = performance under pressure, inverted collapse contribution
+            resilience = round(float(np.clip((pperf + (1.0 - avg_fat)) / 2.0, 0.0, 1.0)), 3)
+
+            match_records.append({
+                "match_id":    mid,
+                "opponent":    opponent,
+                "match_date":  str(mdate)[:10] if mdate else "",
+                "result":      result,
+                "score":       score_str,
+                "avg_influence":             round(avg_inf,  3),
+                "avg_fatigue":               round(avg_fat,  3),
+                "avg_centrality":            round(avg_cent, 3),
+                "peak_fatigue":              round(pk_fat,   3),
+                "minutes_present":           int(mins),
+                "performance_under_pressure": pperf,
+                "collapse_contribution":      cc,
+                "resilience_score":           resilience,
+            })
+    else:
+        # ── Synthetic trajectory seeded from team fingerprint + player name ─
+        db2 = get_db()
+        fp = _team_fingerprint(team, db2)
+        db2.close()
+
+        # Find all WC matches the team played
+        team_matches = db.execute(
+            "SELECT match_id, home_team, away_team, home_score, away_score, match_date "
+            "FROM matches WHERE (home_team = ? OR away_team = ?) "
+            "AND competition = 'FIFA World Cup' ORDER BY match_date",
+            [team, team],
+        ).fetchall()
+
+        if not team_matches:
+            team_matches = []
+
+        s = _player_seed(player)
+        rng = np.random.default_rng(s % 99999)
+
+        base_inf = float(np.clip(0.45 + (s % 40) / 100.0 - fp["turnover_pm"] * 0.3, 0.2, 0.85))
+        base_fat = float(np.clip(0.30 + fp["burstiness"] * 0.5 + (s % 20) / 100.0, 0.15, 0.75))
+        base_res = float(np.clip(0.70 - fp["tempo_variance"] * 0.4 + (s % 30) / 150.0, 0.25, 0.90))
+
+        # Generate 3-6 synthetic matches if no real matches found
+        n_matches = max(3, min(6, len(team_matches)))
+        opponents = ["Brazil","France","Germany","Argentina","England","Spain","Netherlands"]
+        rng2 = np.random.default_rng((s + 7) % 99999)
+
+        trend_dir = float(rng2.choice([-1.0, 0.0, 1.0], p=[0.25, 0.35, 0.40]))
+        for i in range(n_matches):
+            if i < len(team_matches):
+                mid_, ht_, at_, hs_, as_, md_ = team_matches[i]
+                opp_ = at_ if ht_ == team else ht_
+                gd_  = (hs_ - as_) if ht_ == team else (as_ - hs_)
+                res_ = "W" if gd_ > 0 else ("D" if gd_ == 0 else "L")
+                sc_  = f"{hs_}–{as_}"
+                date_ = str(md_)[:10] if md_ else f"Match {i+1}"
+            else:
+                opp_ = opponents[i % len(opponents)]
+                res_ = rng2.choice(["W","D","L"], p=[0.40, 0.25, 0.35])
+                gs_  = int(rng2.integers(0, 3))
+                gc_  = int(rng2.integers(0, 3))
+                sc_  = f"{gs_}–{gc_}"
+                date_ = f"Match {i+1}"
+
+            progress = trend_dir * i * 0.04
+            inf_  = float(np.clip(base_inf + progress + float(rng2.uniform(-0.07, 0.07)), 0.15, 0.92))
+            fat_  = float(np.clip(base_fat + float(rng2.uniform(-0.06, 0.06)), 0.10, 0.85))
+            pp_   = float(np.clip(base_res + progress + float(rng2.uniform(-0.08, 0.08)), 0.15, 0.92))
+            cc_   = float(np.clip(fat_ * (1.0 - inf_) + float(rng2.uniform(-0.04, 0.04)), 0.0, 0.75))
+            res_s = float(np.clip((pp_ + (1.0 - fat_)) / 2.0, 0.0, 0.95))
+
+            match_records.append({
+                "match_id":    i,
+                "opponent":    opp_,
+                "match_date":  date_,
+                "result":      res_,
+                "score":       sc_,
+                "avg_influence":             round(inf_, 3),
+                "avg_fatigue":               round(fat_, 3),
+                "avg_centrality":            round(inf_ * 0.85, 3),
+                "peak_fatigue":              round(min(0.95, fat_ + 0.1), 3),
+                "minutes_present":           int(rng2.integers(60, 91)),
+                "performance_under_pressure": round(pp_, 3),
+                "collapse_contribution":      round(cc_, 3),
+                "resilience_score":           round(res_s, 3),
+            })
+
+    db.close()
+
+    if not match_records:
+        return {"player": player, "team": team, "real_data_found": False,
+                "matches": [], "aggregate": {}, "prediction": {}}
+
+    # ── 3. Aggregate across matches ───────────────────────────────────────
+    def _avg(key: str) -> float:
+        vals = [m[key] for m in match_records if m[key] is not None]
+        return round(sum(vals) / len(vals), 3) if vals else 0.0
+
+    avg_inf  = _avg("avg_influence")
+    avg_fat  = _avg("avg_fatigue")
+    avg_pup  = _avg("performance_under_pressure")
+    avg_cc   = _avg("collapse_contribution")
+    avg_res  = _avg("resilience_score")
+
+    # Trend: compare first-half vs second-half of matches
+    n = len(match_records)
+    if n >= 3:
+        first_half_inf = sum(m["avg_influence"] for m in match_records[:n//2]) / (n//2)
+        second_half_inf = sum(m["avg_influence"] for m in match_records[n//2:]) / (n - n//2)
+        diff = second_half_inf - first_half_inf
+        trend = "improving" if diff > 0.04 else ("declining" if diff < -0.04 else "stable")
+    else:
+        trend = "stable"
+
+    # ── 4. Prediction for next match ─────────────────────────────────────
+    # Simple linear extrapolation with regression-to-mean dampening
+    last = match_records[-1]
+    prev = match_records[-2] if n >= 2 else last
+    momentum = (last["avg_influence"] - prev["avg_influence"]) * 0.5  # dampen
+    predicted_inf = round(float(np.clip(last["avg_influence"] + momentum, 0.1, 0.95)), 3)
+    predicted_fat = round(float(np.clip(last["avg_fatigue"] + 0.02, 0.1, 0.90)), 3)  # fatigue naturally rises
+    error_prob    = round(float(np.clip(predicted_fat * (1.0 - predicted_inf) + avg_cc * 0.3, 0.05, 0.80)), 3)
+    pred_res      = round(float(np.clip(avg_res + momentum * 0.5, 0.1, 0.95)), 3)
+
+    return {
+        "player":          player,
+        "team":            team,
+        "real_data_found": real_data_found,
+        "matches":         match_records,
+        "aggregate": {
+            "matches_analyzed":           n,
+            "avg_influence":              avg_inf,
+            "avg_fatigue":                avg_fat,
+            "performance_under_pressure": avg_pup,
+            "collapse_contribution":      avg_cc,
+            "resilience_score":           avg_res,
+            "trend":                      trend,
+        },
+        "prediction": {
+            "predicted_influence":    predicted_inf,
+            "predicted_fatigue":      predicted_fat,
+            "error_probability":      error_prob,
+            "resilience_prediction":  pred_res,
+            "trend":                  trend,
+        },
+    }
+
+
 # ── WC 2026 Live Simulation ────────────────────────────────────────────────
 @app.get("/api/wc2026/live-sim")
 def wc2026_live_sim(team_a: str = "France", team_b: str = "Brazil"):

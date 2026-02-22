@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Users, ArrowUp, ArrowDown, GitCompare, Star } from 'lucide-react';
-import { motion } from 'motion/react';
+import { Users, ArrowUp, ArrowDown, GitCompare, Star, TrendingUp, TrendingDown, Minus, AlertTriangle, ShieldCheck, Zap } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 import {
   RadarChart, Radar, PolarGrid, PolarAngleAxis, ResponsiveContainer,
-  Tooltip as RechartTooltip,
+  Tooltip as RechartTooltip, LineChart, Line, XAxis, YAxis, CartesianGrid,
+  ReferenceLine, Legend,
 } from 'recharts';
 import { API_BASE } from '../../lib/api';
 
@@ -115,11 +116,51 @@ function PlayerPicker({ accentColor = 'accent', onSelect }: { accentColor?: stri
 }
 
 // ── Page 1: Player Home ────────────────────────────────────────────────────
+// ── Trajectory types ──────────────────────────────────────────────────────
+interface MatchRecord {
+  match_id: number; opponent: string; match_date: string;
+  result: 'W' | 'D' | 'L'; score: string;
+  avg_influence: number; avg_fatigue: number; avg_centrality: number;
+  minutes_present: number;
+  performance_under_pressure: number;
+  collapse_contribution: number;
+  resilience_score: number;
+}
+interface TrajectoryData {
+  player: string; team: string; real_data_found: boolean;
+  matches: MatchRecord[];
+  aggregate: {
+    matches_analyzed: number; avg_influence: number; avg_fatigue: number;
+    performance_under_pressure: number; collapse_contribution: number;
+    resilience_score: number; trend: string;
+  };
+  prediction: {
+    predicted_influence: number; predicted_fatigue: number;
+    error_probability: number; resilience_prediction: number; trend: string;
+  };
+}
+
+function TrendIcon({ trend }: { trend: string }) {
+  if (trend === 'improving') return <TrendingUp className="w-4 h-4 text-emerald-400"/>;
+  if (trend === 'declining') return <TrendingDown className="w-4 h-4 text-red-400"/>;
+  return <Minus className="w-4 h-4 text-amber-400"/>;
+}
+
+function ScoreBadge({ v, lo = 0.4, hi = 0.65 }: { v: number; lo?: number; hi?: number }) {
+  const color = v >= hi ? '#0BDE8C' : v >= lo ? '#F5A623' : '#FF3B5C';
+  return <span className="font-mono font-black text-sm" style={{ color }}>{Math.round(v * 100)}%</span>;
+}
+
 function PlayerHome() {
   const [sel, setSel] = useState<{ team: string; player: Player } | null>(null);
   const { data } = useQuery({
     queryKey: ['player-impact', sel?.team, sel?.player.id],
     queryFn: () => get(`/api/player/team/${encodeURIComponent(sel!.team)}/player/${sel!.player.id}/impact`),
+    enabled: !!sel,
+  });
+  const { data: traj, isLoading: trajLoading } = useQuery<TrajectoryData>({
+    queryKey: ['player-trajectory', sel?.team, sel?.player.name],
+    queryFn: () => get(`/api/player/trajectory?team=${encodeURIComponent(sel!.team)}&player=${encodeURIComponent(sel!.player.name)}`),
     enabled: !!sel,
   });
 
@@ -246,6 +287,181 @@ function PlayerHome() {
               </div>
             );
           })()}
+
+          {/* ── Trajectory & Prediction ─────────────────────────────── */}
+          <AnimatePresence>
+            {(traj || trajLoading) && (
+              <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+                className="bg-collapse-surface border border-collapse-border rounded-2xl overflow-hidden">
+                {/* Header */}
+                <div className="px-6 py-4 border-b border-collapse-border flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <TrendingUp className="w-4 h-4 text-collapse-accent"/>
+                    <p className="text-sm font-bold text-collapse-text">Performance Trajectory</p>
+                    {traj && (
+                      <span className={`ml-1 text-[9px] font-bold px-2 py-0.5 rounded border uppercase tracking-wide ${
+                        traj.real_data_found
+                          ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+                          : 'bg-amber-500/10 border-amber-500/20 text-amber-400'
+                      }`}>
+                        {traj.real_data_found ? 'Live WC data' : 'Synthetic (no WC record)'}
+                      </span>
+                    )}
+                  </div>
+                  {traj?.aggregate && (
+                    <div className="flex items-center gap-1.5">
+                      <TrendIcon trend={traj.aggregate.trend}/>
+                      <span className={`text-xs font-bold capitalize ${
+                        traj.aggregate.trend === 'improving' ? 'text-emerald-400' :
+                        traj.aggregate.trend === 'declining' ? 'text-red-400' : 'text-amber-400'
+                      }`}>{traj.aggregate.trend}</span>
+                    </div>
+                  )}
+                </div>
+
+                {trajLoading ? (
+                  <div className="h-48 flex items-center justify-center text-collapse-muted text-sm gap-2">
+                    <span className="w-4 h-4 border-2 border-collapse-border border-t-collapse-accent rounded-full animate-spin"/>
+                    Loading trajectory…
+                  </div>
+                ) : traj && traj.matches.length > 0 ? (
+                  <div className="p-6 space-y-6">
+                    {/* Per-match chart */}
+                    <div>
+                      <p className="text-[10px] text-collapse-muted uppercase tracking-wider font-bold mb-1">Match-by-Match Arc</p>
+                      <p className="text-[9px] text-collapse-dim mb-3">
+                        Influence · Resilience · Collapse contribution — higher resilience = performed well under pressure
+                      </p>
+                      <ResponsiveContainer width="100%" height={180}>
+                        <LineChart
+                          data={traj.matches.map((m, i) => ({
+                            label: `vs ${m.opponent.length > 10 ? m.opponent.slice(0, 8) + '…' : m.opponent}`,
+                            match: i + 1,
+                            influence:    Math.round(m.avg_influence * 100),
+                            resilience:   Math.round(m.resilience_score * 100),
+                            collapse_risk: Math.round(m.collapse_contribution * 100),
+                            result: m.result,
+                          }))}
+                          margin={{ top: 4, right: 12, left: -24, bottom: 0 }}
+                        >
+                          <CartesianGrid stroke="rgba(148,163,184,0.06)" vertical={false}/>
+                          <XAxis dataKey="label" tick={{ fill: '#64748B', fontSize: 9 }} tickLine={false} axisLine={false}/>
+                          <YAxis domain={[0, 100]} tick={{ fill: '#64748B', fontSize: 9 }} tickLine={false} axisLine={false} tickFormatter={v => `${v}%`}/>
+                          <RechartTooltip
+                            contentStyle={{ background: 'rgba(10,18,40,0.97)', border: '1px solid rgba(148,163,184,0.15)', borderRadius: 10, fontSize: 11 }}
+                            labelStyle={{ color: '#94a3b8', fontWeight: 600 }}
+                            itemStyle={{ color: '#e2e8f0' }}
+                            formatter={(v: number, name: string) => [`${v}%`, name.replace('_', ' ')]}
+                          />
+                          <Legend wrapperStyle={{ fontSize: 9, paddingTop: 8 }}
+                            formatter={v => v.replace('_', ' ')}/>
+                          <ReferenceLine y={50} stroke="rgba(148,163,184,0.15)" strokeDasharray="3 2"/>
+                          <Line type="monotone" dataKey="influence"     stroke="#7C3AED" strokeWidth={2} dot={{ r: 3, fill: '#7C3AED', strokeWidth: 0 }} name="influence"     isAnimationActive={true}/>
+                          <Line type="monotone" dataKey="resilience"    stroke="#0BDE8C" strokeWidth={2} dot={{ r: 3, fill: '#0BDE8C', strokeWidth: 0 }} name="resilience"    isAnimationActive={true}/>
+                          <Line type="monotone" dataKey="collapse_risk" stroke="#FF3B5C" strokeWidth={1.5} dot={{ r: 3, fill: '#FF3B5C', strokeWidth: 0 }} strokeDasharray="4 2" name="collapse risk" isAnimationActive={true}/>
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+
+                    {/* Match history table */}
+                    <div>
+                      <p className="text-[10px] text-collapse-muted uppercase tracking-wider font-bold mb-2">Match History</p>
+                      <div className="space-y-1.5">
+                        {traj.matches.map((m, i) => (
+                          <div key={i} className="flex items-center justify-between bg-collapse-bg rounded-xl px-4 py-2.5 text-xs">
+                            <div className="flex items-center gap-3 min-w-0">
+                              <span className={`shrink-0 w-5 h-5 rounded-md flex items-center justify-center text-[9px] font-black ${
+                                m.result === 'W' ? 'bg-emerald-500/15 text-emerald-400' :
+                                m.result === 'D' ? 'bg-amber-500/15 text-amber-400' :
+                                'bg-red-500/15 text-red-400'
+                              }`}>{m.result}</span>
+                              <span className="font-semibold text-collapse-text truncate">vs {m.opponent}</span>
+                              <span className="text-collapse-dim font-mono shrink-0">{m.score}</span>
+                            </div>
+                            <div className="flex items-center gap-4 shrink-0">
+                              <div className="text-center hidden sm:block">
+                                <p className="text-[8px] text-collapse-dim uppercase">Influence</p>
+                                <ScoreBadge v={m.avg_influence}/>
+                              </div>
+                              <div className="text-center hidden sm:block">
+                                <p className="text-[8px] text-collapse-dim uppercase">Resilience</p>
+                                <ScoreBadge v={m.resilience_score}/>
+                              </div>
+                              <div className="text-center">
+                                <p className="text-[8px] text-collapse-dim uppercase">Collapse↑</p>
+                                <ScoreBadge v={m.collapse_contribution} lo={0.3} hi={0.0}/>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Aggregate + Prediction row */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-collapse-border">
+                      {/* Aggregate */}
+                      <div className="space-y-3">
+                        <p className="text-[10px] text-collapse-muted uppercase tracking-wider font-bold">Tournament Averages</p>
+                        {[
+                          { label: 'Avg Influence',              val: traj.aggregate.avg_influence,              lo: 0.4, hi: 0.65 },
+                          { label: 'Performance Under Pressure', val: traj.aggregate.performance_under_pressure,  lo: 0.4, hi: 0.65 },
+                          { label: 'Resilience Score',           val: traj.aggregate.resilience_score,           lo: 0.4, hi: 0.65 },
+                          { label: 'Collapse Contribution',      val: traj.aggregate.collapse_contribution,      lo: 0.0, hi: 0.0 },
+                        ].map(({ label, val, lo, hi }) => (
+                          <div key={label} className="flex items-center justify-between gap-3">
+                            <span className="text-xs text-collapse-muted truncate">{label}</span>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <div className="w-20 h-1.5 rounded-full bg-collapse-border overflow-hidden">
+                                <div className="h-full rounded-full transition-all duration-700"
+                                  style={{ width: `${Math.round(val * 100)}%`,
+                                    background: label.includes('Collapse') ? '#FF3B5C' :
+                                               val >= hi ? '#0BDE8C' : val >= lo ? '#F5A623' : '#FF3B5C' }}/>
+                              </div>
+                              <ScoreBadge v={val} lo={lo} hi={hi}/>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Prediction card */}
+                      <div className="bg-collapse-bg border border-collapse-border rounded-xl p-4 space-y-3">
+                        <div className="flex items-center gap-2">
+                          <Zap className="w-3.5 h-3.5 text-collapse-accent"/>
+                          <p className="text-[10px] font-bold text-collapse-muted uppercase tracking-wider">Next Match Prediction</p>
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                          {[
+                            { label: 'Predicted Influence',  val: traj.prediction.predicted_influence, icon: TrendingUp,    lo: 0.4, hi: 0.65 },
+                            { label: 'Predicted Fatigue',    val: traj.prediction.predicted_fatigue,   icon: AlertTriangle,  lo: 0.0, hi: 0.0  },
+                            { label: 'Error Probability',    val: traj.prediction.error_probability,   icon: AlertTriangle,  lo: 0.0, hi: 0.0  },
+                            { label: 'Resilience Forecast',  val: traj.prediction.resilience_prediction, icon: ShieldCheck, lo: 0.4, hi: 0.65 },
+                          ].map(({ label, val, lo, hi }) => (
+                            <div key={label} className="bg-collapse-surface rounded-lg px-3 py-2.5">
+                              <p className="text-[8px] text-collapse-dim uppercase tracking-wide leading-tight">{label}</p>
+                              <ScoreBadge v={val} lo={lo} hi={hi}/>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="flex items-center gap-2 pt-1 border-t border-collapse-border">
+                          <TrendIcon trend={traj.prediction.trend}/>
+                          <p className="text-[10px] text-collapse-muted">
+                            Trajectory: <span className={`font-bold capitalize ${
+                              traj.prediction.trend === 'improving' ? 'text-emerald-400' :
+                              traj.prediction.trend === 'declining' ? 'text-red-400' : 'text-amber-400'
+                            }`}>{traj.prediction.trend}</span>
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : traj && traj.matches.length === 0 ? (
+                  <div className="h-32 flex items-center justify-center text-collapse-dim text-xs">
+                    No match records found for this player
+                  </div>
+                ) : null}
+              </motion.div>
+            )}
+          </AnimatePresence>
 
           {/* 3 cards + stats row */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
