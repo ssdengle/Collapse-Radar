@@ -4,8 +4,8 @@ import { Layout } from './layout/Layout';
 import { MatchProvider } from './context/MatchContext';
 import { Dashboard } from './pages/Dashboard';
 import { WarRoom } from './pages/WarRoom';
-import { CoachMode } from './pages/CoachMode';
-import { InjurySim } from './pages/InjurySim';
+import { CoachView } from './pages/CoachView';
+import { PlayerPortal } from './pages/PlayerPortal';
 import { WorldCupContext } from './pages/WorldCupContext';
 import { NotFound } from './pages/NotFound';
 import { Settings } from './pages/Settings';
@@ -57,8 +57,8 @@ export default function App() {
             <Route path="/" element={<Layout />}>
               <Route index element={<Dashboard />} />
               <Route path="war-room" element={<WarRoom />} />
-              <Route path="coach-mode" element={<CoachMode />} />
-              <Route path="injury-sim" element={<InjurySim />} />
+              <Route path="coach-view" element={<CoachView />} />
+              <Route path="player-portal" element={<PlayerPortal />} />
               <Route path="wc-2026" element={<WorldCupContext />} />
               <Route path="settings" element={<Settings />} />
               <Route path="theme" element={<CollapseOSTheme />} />
