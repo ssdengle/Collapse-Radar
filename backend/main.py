@@ -2237,3 +2237,248 @@ def wc2026_live_sim(team_a: str = "France", team_b: str = "Brazil"):
     return {"team_a": team_a, "team_b": team_b, "rivalry_index": rivalry,
             "final_score": {"team_a": score_a, "team_b": score_b},
             "minutes": minutes_data, "events": events}
+
+
+# ── WC 2026 Tournament Simulation ─────────────────────────────────────────
+@app.get("/api/wc2026/simulate-tournament")
+def wc2026_simulate_tournament():
+    """
+    Simulate the full WC 2026 tournament:
+      - 8 groups of 4 teams (group stage)
+      - Round of 16, Quarter-finals, Semi-finals, Third-place, Final
+    Uses team fingerprints as prior strength; deterministic via team-name seeds.
+    """
+    import hashlib, numpy as np
+
+    # ── Seeded groups (balanced geographically like real WC draw) ────────
+    GROUPS: dict[str, list[str]] = {
+        "A": ["Argentina", "Mexico", "Poland",       "Saudi Arabia"],
+        "B": ["France",    "Denmark", "Tunisia",      "Australia"],
+        "C": ["Brazil",    "Serbia",  "Switzerland",  "Cameroon"],
+        "D": ["England",   "USA",     "Iran",         "Wales"],
+        "E": ["Spain",     "Germany", "Japan",        "Costa Rica"],
+        "F": ["Portugal",  "Uruguay", "South Korea",  "Ghana"],
+        "G": ["Netherlands","Ecuador","Qatar",         "Senegal"],
+        "H": ["Belgium",   "Croatia", "Morocco",      "Canada"],
+    }
+
+    _FP_ALIASES = {
+        "USA": "United States", "South Korea": "Korea Republic",
+        "Iran": "IR Iran", "Ivory Coast": "Côte d'Ivoire",
+    }
+
+    # Cache fingerprints
+    db = get_db()
+    fp_cache: dict[str, dict] = {}
+    for teams in GROUPS.values():
+        for t in teams:
+            if t not in fp_cache:
+                fp_cache[t] = _team_fingerprint(_FP_ALIASES.get(t, t), db)
+    db.close()
+
+    RIVALRIES = {
+        frozenset(["France","Brazil"]):0.82, frozenset(["Argentina","Brazil"]):0.95,
+        frozenset(["Argentina","England"]):0.88, frozenset(["Germany","England"]):0.85,
+        frozenset(["Spain","Portugal"]):0.78, frozenset(["USA","Mexico"]):0.80,
+        frozenset(["Netherlands","Germany"]):0.82, frozenset(["Argentina","France"]):0.92,
+        frozenset(["Brazil","Germany"]):0.88,
+    }
+
+    def _strength(team: str, fp: dict) -> float:
+        """0→1 composite strength for a team."""
+        return float(np.clip(
+            0.50
+            + (1.0 - fp.get("burstiness", 0.3)) * 0.20
+            + (1.0 - fp.get("turnover_pm", 0.2)) * 0.15
+            + fp.get("territory_tilt", 0.5) * 0.15
+            + fp.get("def_actions_pm", 0.4) * 0.10,
+            0.25, 0.85,
+        ))
+
+    def _sim_match(ta: str, tb: str, rng_seed: int, is_knockout: bool = False):
+        """Simulate a single match. Returns (score_a, score_b, collapse_risk)."""
+        rng = np.random.default_rng(rng_seed % 999983)
+        fp_a = fp_cache.get(ta, {})
+        fp_b = fp_cache.get(tb, {})
+        rivalry = RIVALRIES.get(frozenset([ta, tb]), 0.50)
+
+        str_a = _strength(ta, fp_a) * (1.0 + rivalry * 0.05)
+        str_b = _strength(tb, fp_b) * (1.0 + rivalry * 0.05)
+        total = str_a + str_b
+
+        # Goal expectations (Poisson-like)
+        lambda_a = max(0.4, (str_a / total) * 2.4 * float(rng.uniform(0.75, 1.25)))
+        lambda_b = max(0.4, (str_b / total) * 2.4 * float(rng.uniform(0.75, 1.25)))
+
+        score_a = int(rng.poisson(lambda_a))
+        score_b = int(rng.poisson(lambda_b))
+
+        # Knockout penalty shootout on draw
+        winner = None
+        pens_a = pens_b = None
+        if is_knockout and score_a == score_b:
+            # penalty shootout
+            kicks_a = [bool(rng.random() < 0.72) for _ in range(5)]
+            kicks_b = [bool(rng.random() < 0.72) for _ in range(5)]
+            pens_a = sum(kicks_a)
+            pens_b = sum(kicks_b)
+            while pens_a == pens_b:
+                pa = bool(rng.random() < 0.72); pb = bool(rng.random() < 0.72)
+                pens_a += pa; pens_b += pb
+            winner = ta if pens_a > pens_b else tb
+        elif score_a > score_b:
+            winner = ta
+        else:
+            winner = tb
+
+        collapse_risk = round(float(np.clip(
+            fp_a.get("burstiness", 0.3) * 0.35 + fp_a.get("turnover_pm", 0.2) * 0.35 + 0.15
+            + (rivalry * 0.10) + float(rng.uniform(-0.05, 0.05)), 0.05, 0.92,
+        )), 3)
+
+        return {
+            "score_a": score_a, "score_b": score_b,
+            "winner": winner, "collapse_risk": collapse_risk,
+            "penalties": {"a": pens_a, "b": pens_b} if pens_a is not None else None,
+        }
+
+    def _match_seed(ta: str, tb: str, stage: str) -> int:
+        return int(hashlib.md5(f"{ta}-{tb}-{stage}".encode()).hexdigest()[:8], 16)
+
+    # ── Group stage ───────────────────────────────────────────────────────
+    group_results: dict[str, dict] = {}
+    group_standings: dict[str, list[dict]] = {}
+
+    for gname, teams in GROUPS.items():
+        records: dict[str, dict] = {
+            t: {"team": t, "played": 0, "won": 0, "drawn": 0, "lost": 0,
+                "gf": 0, "ga": 0, "pts": 0, "collapse_risk": 0.0}
+            for t in teams
+        }
+        matches = []
+        pairs = [(teams[i], teams[j]) for i in range(4) for j in range(i+1, 4)]
+        for ta, tb in pairs:
+            r = _sim_match(ta, tb, _match_seed(ta, tb, f"G{gname}"))
+            sa, sb = r["score_a"], r["score_b"]
+            matches.append({"home": ta, "away": tb, "score": f"{sa}–{sb}",
+                            "winner": r["winner"], "collapse_risk": r["collapse_risk"]})
+            records[ta]["played"] += 1; records[tb]["played"] += 1
+            records[ta]["gf"] += sa;    records[tb]["gf"] += sb
+            records[ta]["ga"] += sb;    records[tb]["ga"] += sa
+            records[ta]["collapse_risk"] = round(
+                (records[ta]["collapse_risk"] * (records[ta]["played"] - 1) + r["collapse_risk"]) / records[ta]["played"], 3)
+            if sa > sb:
+                records[ta]["won"] += 1; records[ta]["pts"] += 3
+                records[tb]["lost"] += 1
+            elif sa < sb:
+                records[tb]["won"] += 1; records[tb]["pts"] += 3
+                records[ta]["lost"] += 1
+            else:
+                records[ta]["drawn"] += 1; records[ta]["pts"] += 1
+                records[tb]["drawn"] += 1; records[tb]["pts"] += 1
+
+        standings = sorted(
+            records.values(),
+            key=lambda x: (-x["pts"], -(x["gf"] - x["ga"]), -x["gf"]),
+        )
+        for i, s in enumerate(standings):
+            s["gd"] = s["gf"] - s["ga"]
+        group_results[gname] = {"matches": matches}
+        group_standings[gname] = standings
+
+    # Top 2 per group advance
+    r16_teams: list[str] = []
+    for g in "ABCDEFGH":
+        r16_teams.append(group_standings[g][0]["team"])
+        r16_teams.append(group_standings[g][1]["team"])
+
+    # ── Knockout bracket (WC 2022 style pairing) ─────────────────────────
+    # R16: 1A vs 2B, 1C vs 2D, 1E vs 2F, 1G vs 2H
+    #      1B vs 2A, 1D vs 2C, 1F vs 2E, 1H vs 2G
+    def _top(g): return group_standings[g][0]["team"]
+    def _sec(g): return group_standings[g][1]["team"]
+
+    r16_fixtures = [
+        (_top("A"), _sec("B")), (_top("C"), _sec("D")),
+        (_top("E"), _sec("F")), (_top("G"), _sec("H")),
+        (_top("B"), _sec("A")), (_top("D"), _sec("C")),
+        (_top("F"), _sec("E")), (_top("H"), _sec("G")),
+    ]
+
+    def _run_stage(fixtures: list[tuple[str, str]], stage: str) -> tuple[list[dict], list[str]]:
+        results, winners = [], []
+        for ta, tb in fixtures:
+            r = _sim_match(ta, tb, _match_seed(ta, tb, stage), is_knockout=True)
+            results.append({
+                "home": ta, "away": tb,
+                "score": f"{r['score_a']}–{r['score_b']}",
+                "winner": r["winner"], "collapse_risk": r["collapse_risk"],
+                "penalties": r["penalties"],
+            })
+            winners.append(r["winner"])
+        return results, winners
+
+    r16_results, r16_winners = _run_stage(r16_fixtures, "R16")
+    qf_fixtures = list(zip(r16_winners[0::2], r16_winners[1::2]))
+    qf_results, qf_winners = _run_stage(qf_fixtures, "QF")
+    sf_fixtures = list(zip(qf_winners[0::2], qf_winners[1::2]))
+    sf_results, sf_winners = _run_stage(sf_fixtures, "SF")
+
+    # Third place
+    sf_losers = [
+        (r16_winners + qf_winners + sf_winners)  # derive SF losers from results
+        for _ in [None]
+    ]
+    # Easier: pull losers from sf_results
+    sf_losers_teams = [
+        (r["home"] if r["away"] == r["winner"] else r["away"]) for r in sf_results
+    ]
+    tp_result, _ = _run_stage([(sf_losers_teams[0], sf_losers_teams[1])], "TP")
+    final_result, final_winners = _run_stage([(sf_winners[0], sf_winners[1])], "F")
+
+    champion = final_winners[0]
+    runner_up = sf_winners[1] if champion == sf_winners[0] else sf_winners[0]
+
+    # ── Top-risk moments (highest collapse risk match in each round) ──────
+    all_matches = (
+        [m for g in group_results.values() for m in g["matches"]]
+        + r16_results + qf_results + sf_results + tp_result + final_result
+    )
+    top_risk = sorted(all_matches, key=lambda m: -m["collapse_risk"])[:5]
+
+    # ── Team stats summary ────────────────────────────────────────────────
+    team_stats: dict[str, dict] = {}
+    for g, standings in group_standings.items():
+        for s in standings:
+            team_stats[s["team"]] = {
+                "group": g, "pts": s["pts"], "gf": s["gf"], "ga": s["ga"],
+                "gd": s["gd"], "collapse_risk": s["collapse_risk"],
+            }
+
+    rounds_reached: dict[str, str] = {}
+    for t in [m["winner"] for m in r16_results]:   rounds_reached[t] = "QF"
+    for t in [m["winner"] for m in qf_results]:    rounds_reached[t] = "SF"
+    for t in sf_losers_teams:                       rounds_reached[t] = "SF exit"
+    rounds_reached[tp_result[0]["winner"]] =       "3rd place"
+    rounds_reached[runner_up] =                    "Runner-up"
+    rounds_reached[champion] =                     "Champion 🏆"
+
+    return {
+        "champion": champion,
+        "runner_up": runner_up,
+        "third_place": tp_result[0]["winner"],
+        "groups": {
+            g: {"standings": group_standings[g], "matches": group_results[g]["matches"]}
+            for g in "ABCDEFGH"
+        },
+        "knockout": {
+            "r16": r16_results,
+            "qf":  qf_results,
+            "sf":  sf_results,
+            "third_place": tp_result,
+            "final": final_result,
+        },
+        "rounds_reached": rounds_reached,
+        "top_risk_matches": top_risk,
+        "team_stats": team_stats,
+    }
