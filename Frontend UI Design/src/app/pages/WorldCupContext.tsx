@@ -1,4 +1,4 @@
-import { useState, useEffect, useSyncExternalStore } from 'react';
+import { useState, useEffect, useMemo, useSyncExternalStore } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { MapContainer, TileLayer, CircleMarker, Popup, useMap, ZoomControl } from 'react-leaflet';
 import {
@@ -90,11 +90,14 @@ function ThemedTileLayer({ isLight }: { isLight: boolean }) {
   );
 }
 
-function FlyToVenue({ venue }: { venue: WC2026Venue | null }) {
+function FlyToVenue({ venue, venueId }: { venue: WC2026Venue | null; venueId: number | null }) {
   const map = useMap();
   useEffect(() => {
-    if (venue) map.flyTo([venue.lat, venue.lon], 5, { duration: 1.4, easeLinearity: 0.25 });
-  }, [venue, map]);
+    if (!venue || venueId == null) return;
+    // Stop previous animation before starting a new one to avoid map jitter/flicker.
+    map.stop();
+    map.flyTo([venue.lat, venue.lon], 4.8, { duration: 0.9, easeLinearity: 0.25 });
+  }, [venueId, venue, map]);
   return null;
 }
 
@@ -121,10 +124,15 @@ export function WorldCupContext() {
   });
 
   const [selectedFixture, setSelectedFixture] = useState<Fixture>(fixtures[0]);
-  const [focusedVenue, setFocusedVenue] = useState<WC2026Venue | null>(null);
+  const [focusedVenueId, setFocusedVenueId] = useState<number | null>(null);
+  const [flyVenueId, setFlyVenueId] = useState<number | null>(null);
   const [comparisonCityA, setComparisonCityA] = useState<WC2026Venue | null>(null);
   const [comparisonCityB, setComparisonCityB] = useState<WC2026Venue | null>(null);
   const [predictionOpen, setPredictionOpen] = useState(false);
+  const focusedVenue = useMemo(
+    () => venues.find(v => v.venue_id === focusedVenueId) ?? null,
+    [venues, focusedVenueId],
+  );
 
   // On venues load, seed comparison cities without flying
   useEffect(() => {
@@ -161,7 +169,8 @@ export function WorldCupContext() {
     setSelectedFixture(fixture);
     const matched = venues.find(v => v.city.toLowerCase() === fixture.venueCity.toLowerCase());
     if (matched) {
-      setFocusedVenue(matched);
+      setFocusedVenueId(matched.venue_id);
+      setFlyVenueId(matched.venue_id);
       setComparisonCityA(matched);
     }
     setPredictionOpen(true);
@@ -176,13 +185,14 @@ export function WorldCupContext() {
         <MapContainer
           center={[38, -98]}
           zoom={4}
+          preferCanvas
           style={{ position: 'absolute', inset: 0, background: isLight ? '#E8EDF2' : '#0F172A' }}
           zoomControl={false}
           className="leaflet-container-dark"
         >
           <ThemedTileLayer isLight={isLight} />
           <ZoomControl position="bottomleft" />
-          <FlyToVenue venue={focusedVenue} />
+          <FlyToVenue venue={focusedVenue} venueId={flyVenueId} />
 
           {venues.map((venue) => {
             const color = stressColor(venue.stress_factor);
@@ -202,9 +212,12 @@ export function WorldCupContext() {
                   opacity: 1,
                 }}
                 eventHandlers={{
-                  click: () => {
-                    setFocusedVenue(venue);
+                  click: (e) => {
+                    setFocusedVenueId(venue.venue_id);
+                    // Clicking a pin should be stable: no fly animation.
+                    setFlyVenueId(null);
                     setComparisonCityA(venue);
+                    e.target.openPopup();
                   },
                 }}
               >
@@ -215,13 +228,13 @@ export function WorldCupContext() {
                   autoPanPaddingTopLeft={[20, 80]}
                   autoPanPaddingBottomRight={[20, 20]}
                 >
-                  <div className="p-3 min-w-[240px]">
+                  <div className="p-3 min-w-[240px] text-slate-100">
                     {/* Header */}
                     <div className="flex items-center gap-2 mb-3">
-                      <div className="w-3 h-3 rounded-full shrink-0"
+                      <div className="w-3 h-3 rounded-full shrink-0 mt-1"
                            style={{ backgroundColor: color, boxShadow: `0 0 8px ${color}` }} />
                       <div>
-                        <h3 className="font-bold text-sm text-collapse-text leading-tight">{venue.city}</h3>
+                        <h3 className="font-bold text-sm text-slate-100 leading-tight">{venue.city}</h3>
                         <span className="text-xs font-bold" style={{ color }}>{stressLabel(venue.stress_factor)} Stress</span>
                       </div>
                     </div>
@@ -233,10 +246,10 @@ export function WorldCupContext() {
                         { icon: <Droplets className="w-3 h-3 text-collapse-accent" />,     val: `${venue.humidity_pct}%`, lbl: 'Humid.' },
                         { icon: <MapPin className="w-3 h-3 text-collapse-muted" />,         val: `${venue.elevation_ft}ft`, lbl: 'Elev.' },
                       ].map(({ icon, val, lbl }) => (
-                        <div key={lbl} className="bg-collapse-elevated rounded p-1.5 text-center">
+                        <div key={lbl} className="bg-slate-100 rounded p-1.5 text-center border border-slate-300">
                           <div className="flex justify-center mb-0.5">{icon}</div>
-                          <div className="font-mono font-bold text-xs text-collapse-text">{val}</div>
-                          <div className="text-[10px] text-collapse-muted">{lbl}</div>
+                          <div className="font-mono font-bold text-xs text-slate-900">{val}</div>
+                          <div className="text-[10px] text-slate-600">{lbl}</div>
                         </div>
                       ))}
                     </div>
@@ -244,7 +257,7 @@ export function WorldCupContext() {
                     {/* Matches — each with Analyse button */}
                     {matchesHere.length > 0 ? (
                       <div>
-                        <p className="text-[10px] text-collapse-muted uppercase tracking-wider mb-1.5 font-medium">
+                        <p className="text-[10px] text-slate-400 uppercase tracking-wider mb-1.5 font-medium">
                           Scheduled Matches
                         </p>
                         <div className="space-y-1.5">
@@ -252,15 +265,15 @@ export function WorldCupContext() {
                             <button
                               key={m.id}
                               onClick={() => selectFixtureForPrediction(m)}
-                              className="w-full flex items-center justify-between bg-collapse-bg rounded px-2.5 py-2 border border-collapse-border hover:border-collapse-accent hover:bg-collapse-accent/5 transition-all group cursor-pointer"
+                              className="w-full flex items-center justify-between bg-slate-100 rounded px-2.5 py-2 border border-slate-300 hover:border-sky-400 hover:bg-sky-50 transition-all group cursor-pointer"
                             >
                               <div className="text-left">
-                                <div className="text-xs font-semibold text-collapse-text">
-                                  {m.teamA} <span className="text-collapse-muted font-normal">vs</span> {m.teamB}
+                                <div className="text-xs font-semibold text-slate-900">
+                                  {m.teamA} <span className="text-slate-500 font-normal">vs</span> {m.teamB}
                                 </div>
-                                <div className="text-[10px] text-collapse-muted font-mono">{m.date}</div>
+                                <div className="text-[10px] text-slate-500 font-mono">{m.date}</div>
                               </div>
-                              <span className="text-[10px] text-collapse-accent font-medium flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <span className="text-[10px] text-sky-600 font-medium flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
                                 Analyse <ChevronRight size={10} />
                               </span>
                             </button>
@@ -453,7 +466,11 @@ export function WorldCupContext() {
                   key={fixture.id}
                   onClick={() => {
                     const matched = venues.find(v => v.city.toLowerCase() === fixture.venueCity.toLowerCase());
-                    if (matched) { setFocusedVenue(matched); setComparisonCityA(matched); }
+                    if (matched) {
+                      setFocusedVenueId(matched.venue_id);
+                      setFlyVenueId(matched.venue_id);
+                      setComparisonCityA(matched);
+                    }
                     setSelectedFixture(fixture);
                   }}
                   className={`p-2 rounded-lg border cursor-pointer transition-all flex items-center justify-between group ${

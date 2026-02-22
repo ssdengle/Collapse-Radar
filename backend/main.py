@@ -42,6 +42,11 @@ INTERNATIONAL_COMPETITIONS = (
     'Olympic Games',
 )
 
+@app.get("/health")
+def health_check():
+    return {"status": "ok"}
+
+
 @app.get("/api/matches")
 def get_matches():
     db = get_db()

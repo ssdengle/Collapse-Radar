@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { useLocation } from 'react-router';
-import { Users, X, Plus, AlertTriangle, TrendingUp, Shield, RefreshCw, Medal } from 'lucide-react';
+import { Users, X, Plus, AlertTriangle, TrendingUp, Shield, RefreshCw, Medal, Zap } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, Cell } from 'recharts';
 
@@ -59,6 +59,144 @@ function spreadSameLane(center: number, count: number) {
   const start = -((count - 1) / 2) * step;
   for (let i = 0; i < count; i++) out.push(center + start + i * step);
   return out.map(x => clamp(x, 8, 92));
+}
+
+// ── Dynamic template edge generator ──────────────────────────────────────────
+// Covers all 10 formation shapes used across the 32 WC2022 squads.
+// Runs in the frontend so bench-swapped players always get connections.
+function generateTemplateEdges(players: Player[]): Edge[] {
+  const byPos: Record<string, string[]> = {};
+  players.forEach(p => { (byPos[p.pos] = byPos[p.pos] || []).push(p.name); });
+  const pick = (...roles: string[]) => roles.flatMap(r => byPos[r] || []);
+
+  const gk   = pick('GK')[0] ?? null;
+  const cbs  = pick('CB');
+  const lbs  = pick('LB');
+  const rbs  = pick('RB');
+  const cdms = pick('CDM', 'DM');          // double-pivot teams may have 2
+  const cms  = pick('CM', 'MF');
+  const cams = pick('CAM');
+  const lws  = pick('LW');
+  const rws  = pick('RW');
+  const sts  = pick('ST', 'CF');
+
+  // Pivot = deepest midfielder (CDM[0] if present, else CM[0])
+  const pivot = cdms[0] ?? cms[0] ?? null;
+  const hasCDM = cdms.length > 0;
+  const hasCAM = cams.length > 0;
+  const hasWingers = lws.length > 0 || rws.length > 0;
+
+  const seen = new Set<string>();
+  const out: Edge[] = [];
+  const w = (a: string, b: string, base: number) =>
+    Math.max(2, Math.min(10, base + ((a.length + b.length) % 3)));
+  const add = (a: string | null | undefined, b: string | null | undefined, base = 6) => {
+    if (!a || !b || a === b) return;
+    const key = [a, b].sort().join('__');
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ source: a, target: b, weight: w(a, b, base) });
+  };
+
+  // ── 1. GK distribution ───────────────────────────────────────────────────
+  // Connect GK to ALL CBs (handles 3-back and 5-back)
+  cbs.forEach(cb => add(gk, cb, 7));
+  lbs.forEach(lb => add(gk, lb, 6));
+  rbs.forEach(rb => add(gk, rb, 6));
+
+  // ── 2. Back line structure ───────────────────────────────────────────────
+  // Chain all CBs left→right
+  for (let i = 0; i < cbs.length - 1; i++) add(cbs[i], cbs[i + 1], 7);
+  // Fullbacks anchor to nearest CB
+  lbs.forEach(lb => add(lb, cbs[0], 7));
+  rbs.forEach(rb => add(rb, cbs[cbs.length - 1], 7));
+
+  // ── 3. Pivot (CDM or deepest CM) ← back line ────────────────────────────
+  if (pivot) {
+    cbs.forEach(cb => add(cb, pivot, 8));       // ALL CBs to pivot (fixes 3-back gap)
+    // Fullback→pivot links only for a true CDM; a plain CM acting as pivot
+    // shouldn't draw long cross-field diagonals to opposite fullback.
+    if (hasCDM) {
+      lbs.forEach(lb => add(lb, pivot, 7));
+      rbs.forEach(rb => add(rb, pivot, 7));
+    } else {
+      lbs.forEach(lb => add(lb, pivot, 7));   // same-side LB is fine
+      // skip RB→pivot for plain CM pivot to avoid long diagonal
+    }
+  }
+
+  // ── 4. Double-pivot mesh (two CDMs) ─────────────────────────────────────
+  if (cdms.length >= 2) add(cdms[0], cdms[1], 8);
+
+  // ── 5. CDM(s) → CMs ─────────────────────────────────────────────────────
+  cdms.forEach(cdm => cms.forEach(cm => add(cdm, cm, 8)));
+
+  // ── 6. CMs mesh ─────────────────────────────────────────────────────────
+  for (let i = 0; i < cms.length - 1; i++) add(cms[i], cms[i + 1], 8);
+  // Cross-link outer CMs in a flat 3 (e.g. 4-3-3)
+  if (cms.length >= 3) add(cms[0], cms[2], 6);
+  // Every CM above the pivot gets linked to it
+  cms.forEach(cm => { if (pivot && cm !== pivot) add(pivot, cm, 8); });
+
+  // ── 7. CDM(s) → CAM direct link (e.g. 4-2-3-1, 3-5-2 with CAM) ─────────
+  cdms.forEach(cdm => cams.forEach(ca => add(cdm, ca, 7)));
+
+  // ── 8. CMs → CAMs ───────────────────────────────────────────────────────
+  cms.forEach(cm => cams.forEach(ca => add(cm, ca, 7)));
+
+  // ── 9. CAMs mesh + connect wide ─────────────────────────────────────────
+  for (let i = 0; i < cams.length - 1; i++) add(cams[i], cams[i + 1], 7);
+  cams.forEach(ca => {
+    sts.forEach(st => add(ca, st, 8));
+    lws.forEach(lw => add(ca, lw, 7));
+    rws.forEach(rw => add(ca, rw, 7));
+  });
+
+  // ── 10. Wide players (LW/RW) → nearest CM only ──────────────────────────
+  // Each winger connects to the spatially closest CM to avoid cross-field
+  // diagonals (e.g. LW → right CM in a flat 4-4-2 looks wrong).
+  // LW → cms[0] (leftmost/pivot), RW → cms[last] (rightmost/advanced).
+  const leftCM  = cms[0] ?? null;
+  const rightCM = cms[cms.length - 1] ?? null;
+  lws.forEach(lw => { add(lw, leftCM, 6); if (cms.length === 1) add(lw, rightCM, 6); });
+  rws.forEach(rw => { add(rw, rightCM, 6); if (cms.length === 1) add(rw, leftCM, 6); });
+
+  // ── 11. No CAM: advanced mids connect forward ────────────────────────────
+  if (!hasCAM) {
+    // Use CMs above the pivot for forward connections
+    const advMids = hasCDM ? cms : (cms.length > 1 ? cms.slice(1) : cms);
+    advMids.forEach(cm => {
+      sts.forEach(st => add(cm, st, 7));
+      lws.forEach(lw => add(cm, lw, 7));
+      rws.forEach(rw => add(cm, rw, 7));
+    });
+  }
+
+  // ── 12. Wing-backs: forward route when no dedicated wingers ──────────────
+  // In formations like 3-5-2, 3-4-2-1 where LB/RB are wingbacks, route them
+  // to the CMs and/or STs directly since there are no LW/RW to connect through.
+  if (!hasWingers) {
+    const advMidsForWB = hasCDM ? cms : cms.slice(Math.max(0, cms.length - 2));
+    lbs.forEach(lb => {
+      advMidsForWB.forEach(cm => add(lb, cm, 6));
+      if (sts.length > 0) add(lb, sts[0], 5);
+    });
+    rbs.forEach(rb => {
+      advMidsForWB.forEach(cm => add(rb, cm, 6));
+      if (sts.length > 0) add(rb, sts[sts.length - 1], 5);
+    });
+  }
+
+  // ── 13. Dual-ST link + wide → ST ────────────────────────────────────────
+  for (let i = 0; i < sts.length - 1; i++) add(sts[i], sts[i + 1], 7);
+  lws.forEach(lw => sts.forEach(st => add(lw, st, 7)));
+  rws.forEach(rw => sts.forEach(st => add(rw, st, 7)));
+
+  // ── 14. Fullback wide overlap ────────────────────────────────────────────
+  lbs.forEach(lb => lws.forEach(lw => add(lb, lw, 6)));
+  rbs.forEach(rb => rws.forEach(rw => add(rb, rw, 6)));
+
+  return out;
 }
 
 function getShortNameMap(players: Player[]) {
@@ -203,9 +341,14 @@ function PassNetwork({ players, edges }: { players: Player[]; edges: Edge[] }) {
     });
     const nameSet = new Set(Object.keys(byName));
 
+    // Merge backend edges with dynamically-generated template edges so bench
+    // players swapped into the XI always get proper connections.
+    const templateEdges = generateTemplateEdges(players);
+    const allEdges = [...templateEdges, ...edges];
+
     // Collapse duplicate undirected links to a single stronger link.
     const linkMap = new Map<string, { source: string; target: string; value: number }>();
-    edges.forEach(e => {
+    allEdges.forEach(e => {
       if (!nameSet.has(e.source) || !nameSet.has(e.target)) return;
       const [a, b] = e.source < e.target ? [e.source, e.target] : [e.target, e.source];
       const key = `${a}__${b}`;
@@ -370,18 +513,14 @@ function getFormationCoords(players: Player[]) {
   return result;
 }
 
-function getFormationName(players: Player[]) {
-  const counts: Record<number, number> = {};
-  for (const p of players) {
-    const row = POS_ROW[p.pos] ?? 3;
-    if (row > 0) counts[row] = (counts[row] ?? 0) + 1;
-  }
-  // Read defense → attack: row 1 (defenders) first, row 5 (attackers) last
-  const rows = Object.keys(counts).map(Number).sort((a, b) => a - b);
-  return rows.map(r => counts[r]).join('-');
+function getFormationName(_players: Player[], team?: string): string {
+  // Always use the team's known tactical shape — it represents their playstyle
+  // and doesn't change just because a bench player is swapped in.
+  if (team && TEAM_FORMATION[team]) return TEAM_FORMATION[team];
+  return '4-3-3';
 }
 
-function PitchFormation({ players, onToggle }: { players: Player[]; onToggle: (id: number) => void }) {
+function PitchFormation({ players, onToggle, team }: { players: Player[]; onToggle: (id: number) => void; team?: string }) {
   const VW = 420; const VH = 640;
   const px = (x: number) => (x / 100) * VW;
   const py = (y: number) => (y / 100) * VH;
@@ -399,7 +538,7 @@ function PitchFormation({ players, onToggle }: { players: Player[]; onToggle: (i
   }
 
   const coords = getFormationCoords(players);
-  const formation = getFormationName(players);
+  const formation = getFormationName(players, team);
   const shortNames = getShortNameMap(players);
 
   // Group coords by row for drawing connecting lines
@@ -632,6 +771,74 @@ function RiskComparison({ team, adjustedRisk, tournament }: { team: string; adju
 }
 
 
+// ── Formation slot requirements (matches backend SHAPE_POS) ──────────────────
+const FORMATION_SLOTS: Record<string, string[]> = {
+  '4-3-3':   ['GK','RB','CB','CB','LB','CM','CM','CM','RW','LW','ST'],
+  '4-2-3-1': ['GK','RB','CB','CB','LB','CDM','CM','RW','CAM','LW','ST'],
+  '4-4-2':   ['GK','RB','CB','CB','LB','RW','CM','CM','LW','ST','ST'],
+  '3-4-3':   ['GK','CB','CB','CB','RB','LB','CM','CM','RW','LW','ST'],
+  '3-4-1-2': ['GK','CB','CB','CB','RB','LB','CM','CM','CAM','ST','ST'],
+  '3-5-2':   ['GK','CB','CB','CB','RB','LB','CDM','CM','CM','ST','ST'],
+  '4-1-4-1': ['GK','RB','CB','CB','LB','CDM','RW','CM','CM','LW','ST'],
+  '4-4-1-1': ['GK','RB','CB','CB','LB','RW','CM','CM','LW','CAM','ST'],
+  '5-4-1':   ['GK','RB','CB','CB','CB','LB','RW','CM','CM','LW','ST'],
+  '3-4-2-1': ['GK','CB','CB','CB','RB','LB','CM','CM','CAM','CAM','ST'],
+};
+
+// Team → formation lookup (matches backend TEAM_SHAPES)
+const TEAM_FORMATION: Record<string, string> = {
+  Argentina:'4-3-3', Australia:'4-4-2', Belgium:'3-4-2-1', Brazil:'4-3-3',
+  Cameroon:'4-3-3', Canada:'3-4-3', 'Costa Rica':'5-4-1', Croatia:'4-3-3',
+  Denmark:'3-4-3', Ecuador:'4-4-2', England:'4-3-3', France:'4-2-3-1',
+  Germany:'4-2-3-1', Ghana:'4-2-3-1', Iran:'4-4-1-1', Japan:'4-2-3-1',
+  Mexico:'4-3-3', Morocco:'4-1-4-1', Netherlands:'3-4-1-2', Poland:'4-4-2',
+  Portugal:'4-3-3', Qatar:'3-5-2', 'Saudi Arabia':'4-3-3', Senegal:'4-3-3',
+  Serbia:'3-5-2', 'South Korea':'4-2-3-1', Spain:'4-3-3', Switzerland:'4-2-3-1',
+  Tunisia:'4-3-3', USA:'4-3-3', Uruguay:'4-3-3', Wales:'3-4-2-1',
+};
+
+// ── Auto-Optimize: pick the best 11 to minimise collapse risk ─────────────────
+// Score = influence × (1 − load/100). Higher = better (high influence, low load).
+function autoOptimize(players: Player[], team: string): { ids: Set<number>; swaps: string[] } {
+  const shape = TEAM_FORMATION[team] ?? '4-3-3';
+  const slots = [...(FORMATION_SLOTS[shape] ?? FORMATION_SLOTS['4-3-3'])];
+
+  const score = (p: Player) => p.influence * (1 - p.load / 100);
+  const available = [...players].sort((a, b) => score(b) - score(a));
+
+  const selected: Player[] = [];
+  const used = new Set<number>();
+
+  // Fill each slot with best available player for that position
+  for (const slot of slots) {
+    const match = available.find(p => p.pos === slot && !used.has(p.id));
+    if (match) { selected.push(match); used.add(match.id); }
+  }
+
+  // Fill any unfilled slots (position mismatch) with best remaining players
+  if (selected.length < 11) {
+    for (const p of available) {
+      if (selected.length >= 11) break;
+      if (!used.has(p.id)) { selected.push(p); used.add(p.id); }
+    }
+  }
+
+  // Build explanation: list swaps vs. default first-11
+  const defaultIds = new Set(players.slice(0, 11).map(p => p.id));
+  const newIds     = new Set(selected.map(p => p.id));
+  const swaps: string[] = [];
+  players.slice(0, 11).forEach(p => {
+    if (!newIds.has(p.id)) {
+      const replacement = selected.find(s => !defaultIds.has(s.id) && s.pos === p.pos) ?? selected.find(s => !defaultIds.has(s.id));
+      if (replacement) {
+        swaps.push(`${p.name} (${Math.round(p.load)}% load) → ${replacement.name} (${Math.round(replacement.load)}% load)`);
+      }
+    }
+  });
+
+  return { ids: newIds, swaps };
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 export function CoachLineup() {
   const location = useLocation();
@@ -646,6 +853,18 @@ export function CoachLineup() {
   // Drag-and-drop state
   const [draggingId, setDraggingId] = useState<number | null>(null);
   const [dragOverId, setDragOverId] = useState<number | null>(null);
+
+  // Auto-optimize state
+  const [autoSwaps, setAutoSwaps] = useState<string[]>([]);
+  const [showAutoPanel, setShowAutoPanel] = useState(false);
+
+  function handleAutoOptimize() {
+    if (!squadData?.players.length || !team) return;
+    const { ids, swaps } = autoOptimize(squadData.players, team);
+    setXi(ids);
+    setAutoSwaps(swaps);
+    setShowAutoPanel(swaps.length > 0);
+  }
 
   const { data: teams = [] } = useQuery<string[]>({
     queryKey: ['coach-teams', tournament],
@@ -675,8 +894,8 @@ export function CoachLineup() {
     evaluate({ team, player_names: names });
   }, [xi, team, squadData]);
 
-  // Reset XI when team changes
-  useEffect(() => { setXi(new Set()); }, [team]);
+  // Reset XI and auto-panel when team changes
+  useEffect(() => { setXi(new Set()); setAutoSwaps([]); setShowAutoPanel(false); }, [team]);
 
   const allPlayers = squadData?.players ?? [];
   const sortedPlayers = [...allPlayers].sort((a, b) => posOrder(a.pos) - posOrder(b.pos));
@@ -762,6 +981,12 @@ export function CoachLineup() {
             <Dropdown options={teams} value={team} onChange={v => { setTeam(v); if (v === opponent) setOpponent(''); }} placeholder="Your team…"/>
             <span className="text-collapse-muted text-sm font-medium">vs</span>
             <Dropdown options={teams.filter(t => t !== team)} value={opponent} onChange={setOpponent} placeholder="Opponent (optional)…"/>
+            {team && squadData && (
+              <button onClick={handleAutoOptimize}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-400 hover:bg-amber-500/20 transition-all text-xs font-bold">
+                <Zap className="w-3.5 h-3.5"/>Auto-Optimize
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -799,6 +1024,24 @@ export function CoachLineup() {
                 </div>
                 <span className="text-[10px] font-mono text-collapse-muted">{11 - xi.size} to go</span>
               </div>
+              {/* Auto-optimize swaps panel */}
+              {showAutoPanel && autoSwaps.length > 0 && (
+                <div className="mt-3 rounded-xl border border-amber-500/25 bg-amber-500/5 p-2.5">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <div className="flex items-center gap-1.5">
+                      <Zap className="w-3 h-3 text-amber-400"/>
+                      <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wide">Optimized · {autoSwaps.length} swap{autoSwaps.length > 1 ? 's' : ''}</span>
+                    </div>
+                    <button onClick={() => setShowAutoPanel(false)} className="text-collapse-dim hover:text-collapse-muted text-[10px]">✕</button>
+                  </div>
+                  <div className="space-y-1">
+                    {autoSwaps.map((s, i) => (
+                      <div key={i} className="text-[10px] text-amber-300/80 font-mono leading-tight">↻ {s}</div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {xi.size > 0 && (
                 <div className="flex gap-3 mt-2">
                   <div className="flex items-center gap-1">
@@ -879,7 +1122,7 @@ export function CoachLineup() {
             {/* Tab body */}
             {rightTab === 'formation' && (
               <div className="flex-1 min-h-0 overflow-hidden">
-                <PitchFormation players={xiPlayers} onToggle={togglePlayer}/>
+                <PitchFormation players={xiPlayers} onToggle={togglePlayer} team={team}/>
               </div>
             )}
             {rightTab === 'network' && (

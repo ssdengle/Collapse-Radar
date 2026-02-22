@@ -1,4 +1,4 @@
-@custom-variant dark (&:is(.dark *));
+@custom-variant dark (&:where(.dark, .dark *));
 
 :root {
   --font-size: 16px;
@@ -145,20 +145,8 @@
   --font-mono: "JetBrains Mono", "Courier New", monospace;
 }
 
-/* ── Dark theme (default) ── */
+/* ── Light theme (base) ── */
 :root {
-  --c-bg:       #080D14;
-  --c-surface:  #0D1520;
-  --c-elevated: #111B2A;
-  --c-border:   #1C2D40;
-  --c-hover:    #162236;
-  --c-text:     #F1F5F9;
-  --c-muted:    #94A3B8;
-  --c-dim:      #475569;
-}
-
-/* ── Light theme ── */
-html.light {
   --c-bg:       #F1F5F9;
   --c-surface:  #FFFFFF;
   --c-elevated: #E2EBF6;
@@ -167,6 +155,18 @@ html.light {
   --c-text:     #0F172A;
   --c-muted:    #475569;
   --c-dim:      #94A3B8;
+}
+
+/* ── Dark theme (class-based) ── */
+html.dark {
+  --c-bg:       #080D14;
+  --c-surface:  #0D1520;
+  --c-elevated: #111B2A;
+  --c-border:   #1C2D40;
+  --c-hover:    #162236;
+  --c-text:     #F1F5F9;
+  --c-muted:    #94A3B8;
+  --c-dim:      #475569;
 }
 
 @layer base {

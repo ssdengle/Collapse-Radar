@@ -15,11 +15,35 @@ export function Dashboard() {
         <div className="absolute inset-0">
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_25%,rgba(14,165,233,0.20),transparent_35%),radial-gradient(circle_at_70%_45%,rgba(14,165,233,0.10),transparent_40%)]" />
           <div className="absolute inset-0 opacity-45 [background:repeating-linear-gradient(90deg,rgba(33,95,65,0.35)_0,rgba(33,95,65,0.35)_42px,rgba(18,63,42,0.35)_42px,rgba(18,63,42,0.35)_84px)]" />
-          <div className="absolute inset-y-0 left-1/2 w-px bg-white/25" />
-          <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-44 h-44 rounded-full border border-white/25" />
-          <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-2 h-2 rounded-full bg-white/45" />
-          <div className="absolute top-0 right-0 w-[22%] h-full border-l border-white/20" />
-          <div className="absolute top-1/2 right-0 -translate-y-1/2 w-[10%] h-[44%] border-l border-y border-white/20" />
+          {/* Field markings (true 105x68 proportions, no distortion) */}
+          <svg viewBox="0 0 105 68" preserveAspectRatio="xMidYMid slice" className="absolute inset-0 w-full h-full">
+            <defs>
+              {/* Keep only outer half of the penalty arcs */}
+              <clipPath id="leftArcClip"><rect x="16.5" y="0" width="88.5" height="68"/></clipPath>
+              <clipPath id="rightArcClip"><rect x="0" y="0" width="88.5" height="68"/></clipPath>
+            </defs>
+            <g stroke="rgba(196,242,255,0.32)" fill="none" strokeWidth="0.24">
+              {/* Boundary + halfway + center circle */}
+              <rect x="0" y="0" width="105" height="68" />
+              <line x1="52.5" y1="0" x2="52.5" y2="68" />
+              <circle cx="52.5" cy="34" r="9.15" />
+
+              {/* Penalty areas */}
+              <rect x="0" y="13.84" width="16.5" height="40.32" />
+              <rect x="0" y="24.84" width="5.5" height="18.32" />
+              <rect x="88.5" y="13.84" width="16.5" height="40.32" />
+              <rect x="99.5" y="24.84" width="5.5" height="18.32" />
+
+              {/* Penalty arcs (outside the boxes) */}
+              <circle cx="11" cy="34" r="9.15" clipPath="url(#leftArcClip)" />
+              <circle cx="94" cy="34" r="9.15" clipPath="url(#rightArcClip)" />
+            </g>
+
+            {/* Spots */}
+            <circle cx="11" cy="34" r="0.48" fill="rgba(224,250,255,0.92)" />
+            <circle cx="52.5" cy="34" r="0.48" fill="rgba(224,250,255,0.92)" />
+            <circle cx="94" cy="34" r="0.48" fill="rgba(224,250,255,0.92)" />
+          </svg>
           <div className="absolute inset-0 bg-gradient-to-r from-[#061725]/5 via-transparent to-[#061725]/50" />
         </div>
 
