@@ -41,40 +41,38 @@ def _seed(match_id: int, team: str = ""):
 
 
 def synthetic_timeline(match_id: int, team: str, num_minutes: int = 96):
-    """Generate timeline points so each match has a clearly different curve."""
+    """Generate timeline points so each match has a clearly different curve.
+
+    Parameters are tuned so avg_risk spans ~0.20–0.72, giving a realistic
+    mix of LOW / MED / HIGH teams across the tournament.
+    """
     s = _seed(match_id, team)
     out = []
-    # Vary curve shape strongly by match: peak position, slope, and base level
-    peak_minute = 35 + (s % 45)  # peak somewhere 35-80
-    slope = 0.003 + (s % 7) / 2000  # 0.003 to ~0.0065
-    base_level = 0.12 + (s % 25) / 100  # 0.12 to 0.36
-    hump_size = 0.25 + (s % 30) / 100  # 0.25 to 0.55
+    # Use different bit-slices of the seed for each param so they vary independently
+    # (WC match_ids are close together; simple mod produces correlated values)
+    peak_minute = 30 + (s >> 3) % 50       # 30–80
+    slope       = 0.0003 + (s >> 9)  % 9  / 8000   # 0.0003–0.0014
+    base_level  = 0.14  + (s >> 5)  % 55  / 100    # 0.14–0.68  → LOW to HIGH
+    hump_size   = 0.08  + (s >> 14) % 38  / 100    # 0.08–0.45
     for i in range(num_minutes):
-        # Rising baseline
         base = base_level + i * slope
-        # Add a "hump" around peak_minute so each match has a distinct shape
         dist = abs(i - peak_minute)
-        hump = hump_size * max(0, 1 - dist / 25)
+        hump = hump_size * max(0, 1 - dist / 22)
         prob = base + hump
-        # Small minute-level noise so it's not a perfect line
-        noise = ((s + i * 17) % 11 - 5) / 500
-        prob = min(0.92, max(0.08, prob + noise))
+        noise = ((s + i * 17) % 11 - 5) / 400
+        prob = min(0.90, max(0.06, prob + noise))
         cusum = (i in (25, 50, 75)) or (i == peak_minute and (s % 2 == 0))
         out.append({"minute": i, "probability": round(prob, 4), "cusum_flag": cusum})
     return out
 
 
 GOAL_TYPES = ["open_play", "penalty", "direct_free_kick", "open_play", "open_play", "header"]
-SYNTH_SCORERS = [
-    "Silva", "Torres", "Guedes", "Trincão", "Diogo Jota",
-    "Kane", "Bellingham", "Saka", "Foden", "Rashford",
-    "Müller", "Gnabry", "Havertz", "Werner", "Kimmich",
-]
 
 
 def synthetic_goals(match_id: int, home_team: str = "Home", away_team: str = "Away",
                     home_score: int = 1, away_score: int = 1):
-    """Generate exactly home_score + away_score goals with deterministic minutes and types."""
+    """Generate exactly home_score + away_score goals with deterministic minutes and types.
+    Scorer names are intentionally omitted for synthetic data — only real data carries them."""
     s = _seed(match_id, "goals")
     minute_pool = [
         10 + s % 8, 22 + s % 10, 34 + s % 7, 44 + (s // 3) % 8,
@@ -84,14 +82,13 @@ def synthetic_goals(match_id: int, home_team: str = "Home", away_team: str = "Aw
     home_left, away_left = home_score, away_score
     for i, minute in enumerate(minute_pool):
         goal_type = GOAL_TYPES[(s + i * 13) % len(GOAL_TYPES)]
-        scorer = SYNTH_SCORERS[(s + i * 7) % len(SYNTH_SCORERS)]
         if home_left > 0 and (i % 2 == 0 or away_left == 0):
             home_goals.append({"minute": minute, "scoring_team": home_team,
-                                "conceding_team": away_team, "goal_type": goal_type, "scorer": scorer})
+                                "conceding_team": away_team, "goal_type": goal_type, "scorer": ""})
             home_left -= 1
         elif away_left > 0:
             away_goals.append({"minute": minute, "scoring_team": away_team,
-                                "conceding_team": home_team, "goal_type": goal_type, "scorer": scorer})
+                                "conceding_team": home_team, "goal_type": goal_type, "scorer": ""})
             away_left -= 1
         if home_left == 0 and away_left == 0:
             break

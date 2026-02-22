@@ -179,13 +179,14 @@ def get_timeline(match_id: int, team: str):
     else:
         base = synthetic_timeline(match_id, team)
 
-    # Extend to 120 minutes for ET matches if timeline stops at ~90
+    # Extend to 120 minutes for ET matches (always — real data may stop anywhere up to ~95)
     et = ET_MATCHES.get(match_id)
-    if et and (not base or base[-1]["minute"] <= 92):
+    if et and (not base or base[-1]["minute"] < 120):
         import random
         random.seed(match_id + 999)
         last_prob = base[-1]["probability"] if base else 0.35
-        for m in range(91, 121):
+        start_min = (base[-1]["minute"] + 1) if base else 91
+        for m in range(start_min, 121):
             noise = (random.random() - 0.5) * 0.09
             # ET is tense — keep risk elevated
             noise += 0.015
@@ -414,7 +415,8 @@ def get_top_matches():
         })
     db.close()
 
-    results.sort(key=lambda x: x["peak_risk"], reverse=True)
+    # Sort by avg_risk; synthetic peak values all cap at 0.92 so peak_risk is uninformative
+    results.sort(key=lambda x: x["avg_risk"], reverse=True)
     return results[:10]
 
 
@@ -957,8 +959,8 @@ def get_match_replay(match_id: int):
             prob = max(0.05, min(0.92, prob + noise))
             timeline.append({"minute": m, "probability": round(prob, 3)})
 
-    # Extend real data to ET if needed
-    if et_info and timeline and timeline[-1]["minute"] <= 92:
+    # Extend real data to ET if needed (always extend to 120, regardless of where data ends)
+    if et_info and timeline and timeline[-1]["minute"] < 120:
         random.seed(match_id + 999)
         last_prob = timeline[-1]["probability"]
         for m in range(timeline[-1]["minute"] + 1, 121):
@@ -1255,6 +1257,102 @@ _SQUADS: dict = {
 
 def _player_seed(name: str, salt: int = 0) -> int:
     return (sum(ord(c)*(i+1) for i,c in enumerate(name)) + salt) % 1000
+
+
+@app.get("/api/coach/lineup/squad")
+def get_lineup_squad(team: str, tournament: str = "wc2022"):
+    """Return full squad with stability load, influence, and pass edges for the lineup builder."""
+    db = get_db()
+    fp = _team_fingerprint(_normalize_team(team), db)
+
+    # Try to get real pass-network data from the team's most recent match
+    comp, season = TOURNAMENT_SEASON.get(tournament, ("FIFA World Cup", "2022"))
+    match_row = db.execute(
+        "SELECT match_id FROM matches WHERE competition=? AND season=? "
+        "AND (home_team=? OR away_team=?) ORDER BY match_id DESC LIMIT 1",
+        [comp, season, team, team],
+    ).fetchone()
+
+    real_nodes: dict = {}
+    real_edges: list = []
+    if match_row:
+        mid = match_row[0]
+        node_rows = db.execute(
+            "SELECT player, influence_score, fatigue_score FROM pass_nodes "
+            "WHERE match_id=? ORDER BY minute DESC",
+            [mid],
+        ).fetchall()
+        # keep only the last (most recent minute) entry per player
+        for player, influence, fatigue in node_rows:
+            if player not in real_nodes:
+                real_nodes[player] = {"influence": influence, "fatigue": fatigue}
+        edge_rows = db.execute(
+            "SELECT from_player, to_player, pass_count FROM pass_edges "
+            "WHERE match_id=? ORDER BY minute DESC",
+            [mid],
+        ).fetchall()
+        seen_edges: set = set()
+        for fp_name, tp, pc in edge_rows:
+            key = (fp_name, tp)
+            if key not in seen_edges:
+                seen_edges.add(key)
+                real_edges.append({"source": fp_name, "target": tp, "weight": pc})
+    db.close()
+
+    raw = _SQUADS.get(team, [(f"Player {i+1}", "MF") for i in range(11)])
+    players = []
+    for i, entry in enumerate(raw):
+        name, role = entry if isinstance(entry, tuple) else (entry, "MF")
+        s = _player_seed(name)
+        if name in real_nodes:
+            influence = round(real_nodes[name]["influence"] * 10, 1)
+            load      = round(real_nodes[name]["fatigue"] * 100, 1)
+        else:
+            influence = round(3 + (s >> 4) % 70 / 10, 1)   # 3.0–10.0
+            load      = round(max(20, min(95, 55 - fp.get("turnover_pm", 0.2)*30 + (s % 35) - 10)), 1)
+        players.append({
+            "id": i, "name": name, "pos": role,
+            "load": load, "influence": influence,
+        })
+
+    # Build pass edges using real data where available; fall back to synthetic
+    if not real_edges:
+        for i in range(len(raw)):
+            for j in range(len(raw)):
+                if i != j:
+                    ni, nj = raw[i], raw[j]
+                    n1 = ni[0] if isinstance(ni, tuple) else ni
+                    n2 = nj[0] if isinstance(nj, tuple) else nj
+                    s2 = _player_seed(n1) + _player_seed(n2)
+                    if (s2 + i * 11 + j * 7) % 4 == 0:
+                        real_edges.append({"source": n1, "target": n2,
+                                           "weight": 3 + (s2 + i + j) % 10})
+
+    return {"players": players, "edges": real_edges}
+
+
+@app.post("/api/coach/lineup/evaluate")
+def evaluate_lineup(body: dict):
+    """Given a subset of player names, return collapse risk delta vs full XI."""
+    team     = body.get("team", "")
+    selected = set(body.get("player_names", []))
+    db = get_db()
+    fp = _team_fingerprint(_normalize_team(team), db)
+    db.close()
+
+    raw = _SQUADS.get(team, [])
+    full_xi  = len(raw)
+    present  = sum(1 for e in raw if (e[0] if isinstance(e, tuple) else e) in selected)
+    missing  = full_xi - present
+
+    base_risk = round(fp.get("burstiness", 0.2) * 0.4 + fp.get("turnover_pm", 0.3) * 0.3 + 0.25, 3)
+    delta     = round(missing * 0.025, 3)   # each missing player adds ~2.5pp risk
+    return {
+        "base_risk": base_risk,
+        "adjusted_risk": min(0.95, base_risk + delta),
+        "delta": delta,
+        "missing_count": missing,
+    }
 
 
 @app.get("/api/player/teams")

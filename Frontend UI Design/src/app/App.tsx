@@ -5,6 +5,7 @@ import { MatchProvider } from './context/MatchContext';
 import { Dashboard } from './pages/Dashboard';
 import { WarRoom } from './pages/WarRoom';
 import { CoachView } from './pages/CoachView';
+import { CoachLineup } from './pages/CoachLineup';
 import { PlayerPortal } from './pages/PlayerPortal';
 import { WorldCupContext } from './pages/WorldCupContext';
 import { NotFound } from './pages/NotFound';
@@ -58,6 +59,7 @@ export default function App() {
               <Route index element={<Dashboard />} />
               <Route path="war-room" element={<WarRoom />} />
               <Route path="coach-view" element={<CoachView />} />
+              <Route path="coach-lineup" element={<CoachLineup />} />
               <Route path="player-portal" element={<PlayerPortal />} />
               <Route path="wc-2026" element={<WorldCupContext />} />
               <Route path="settings" element={<Settings />} />

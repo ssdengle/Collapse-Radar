@@ -3,7 +3,6 @@ import { NavLink } from "../components/router-components";
 import { 
   LayoutDashboard, 
   Globe, 
-  ShieldCheck, 
   Settings, 
   Menu,
   ChevronRight,
@@ -11,6 +10,7 @@ import {
   Swords,
   BrainCircuit,
   Users,
+  ClipboardList,
 } from "lucide-react";
 import { useState } from "react";
 import { clsx } from "clsx";
@@ -22,6 +22,8 @@ export function Layout() {
   const location = useLocation();
   const navigate = useNavigate();
   const isHome = location.pathname === '/';
+  // War Room has its own "Back to matches" button — don't show the global one there
+  const hasOwnBack = location.pathname === '/war-room';
 
   return (
     <div className="flex h-screen bg-collapse-bg text-collapse-text overflow-hidden font-sans">
@@ -33,9 +35,7 @@ export function Layout() {
       >
         {/* Logo */}
         <div className="h-16 flex items-center px-6 border-b border-collapse-border shrink-0">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-collapse-accent to-collapse-purple flex items-center justify-center shrink-0 shadow-lg shadow-collapse-accent/20">
-            <ShieldCheck className="w-5 h-5 text-white" />
-          </div>
+          <img src="/logo.png" alt="CollapseOS" className="w-9 h-9 rounded-lg shrink-0 object-contain" />
           <AnimatePresence>
             {isSidebarOpen && (
               <motion.span 
@@ -55,6 +55,7 @@ export function Layout() {
           <NavItem to="/" icon={<LayoutDashboard size={20} />} label="Dashboard" isOpen={isSidebarOpen} />
           <NavItem to="/war-room" icon={<Swords size={20} />} label="War Room" isOpen={isSidebarOpen} />
           <NavItem to="/coach-view" icon={<BrainCircuit size={20} />} label="Coach View" isOpen={isSidebarOpen} />
+          <NavItem to="/coach-lineup" icon={<ClipboardList size={20} />} label="Lineup Builder" isOpen={isSidebarOpen} />
           <NavItem to="/player-portal" icon={<Users size={20} />} label="Player Portal" isOpen={isSidebarOpen} />
           <NavItem to="/wc-2026" icon={<Globe size={20} />} label="WC 2026" isOpen={isSidebarOpen} />
           <NavItem to="/settings" icon={<Settings size={20} />} label="Settings" isOpen={isSidebarOpen} />
@@ -75,8 +76,8 @@ export function Layout() {
         <header className="h-16 bg-collapse-bg/80 backdrop-blur-md border-b border-collapse-border flex items-center justify-between px-6 sticky top-0 z-10 shrink-0">
           <div className="flex items-center gap-3 text-collapse-muted">
              <Menu className="lg:hidden w-6 h-6 cursor-pointer" onClick={() => setIsSidebarOpen(!isSidebarOpen)} />
-             {/* Back button — shown on all non-home pages */}
-             {!isHome && (
+             {/* Back button — shown on non-home pages that don't have their own back button */}
+             {!isHome && !hasOwnBack && (
                <button
                  onClick={() => navigate(-1)}
                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-collapse-border bg-collapse-surface hover:border-collapse-accent hover:text-collapse-accent transition-all text-sm font-medium"
