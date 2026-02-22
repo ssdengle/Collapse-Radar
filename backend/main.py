@@ -2071,8 +2071,9 @@ def wc2026_live_sim(team_a: str = "France", team_b: str = "Brazil"):
 
     try:
         db = get_db()
-        fp_a = _team_fingerprint(_SQUAD_ALIASES.get(team_a, team_a), db)
-        fp_b = _team_fingerprint(_SQUAD_ALIASES.get(team_b, team_b), db)
+        _fp_aliases = {"USA": "United States", "South Korea": "Korea Republic", "Iran": "IR Iran"}
+        fp_a = _team_fingerprint(_fp_aliases.get(team_a, team_a), db)
+        fp_b = _team_fingerprint(_fp_aliases.get(team_b, team_b), db)
         db.close()
     except Exception:
         fp_a = {"burstiness": 0.30, "turnover_pm": 0.20, "territory_tilt": 0.50,
@@ -2099,9 +2100,16 @@ def wc2026_live_sim(team_a: str = "France", team_b: str = "Brazil"):
     }
     rivalry = RIVALRIES.get(frozenset([team_a, team_b]), 0.50)
 
-    def _squad(team: str):
-        return _SQUADS.get(_SQUAD_ALIASES.get(team, team),
-                           [(f"Player {i+1}", "MF") for i in range(18)])
+    # Alias map: WC2026 display names → _SQUADS keys
+    _SIM_ALIASES = {
+        "USA": "USA", "United States": "USA",
+        "Korea Republic": "South Korea", "IR Iran": "Iran",
+        "Côte d'Ivoire": "Ivory Coast",
+    }
+
+    def _squad(t: str):
+        key = _SIM_ALIASES.get(t, t)
+        return _SQUADS.get(key, [(f"Player {i+1}", "MF") for i in range(18)])
 
     def _pick(squad, idx: int) -> str:
         e = squad[int(idx) % len(squad)]
