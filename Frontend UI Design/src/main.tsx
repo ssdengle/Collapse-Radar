@@ -4,6 +4,11 @@ import { createRoot } from 'react-dom/client'
 import App from './app/App'
 import './styles/index.css'
 
+// Apply saved theme before first render to avoid flash
+if (localStorage.getItem('collapse-theme') === 'light') {
+  document.documentElement.classList.add('light')
+}
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {

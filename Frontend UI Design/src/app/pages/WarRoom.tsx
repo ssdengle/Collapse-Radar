@@ -4,8 +4,8 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, ReferenceLine,
 } from 'recharts';
-import { ShieldAlert, Timer, ArrowLeft, Search, Sparkles } from 'lucide-react';
-import { motion } from 'motion/react';
+import { ShieldAlert, Timer, ArrowLeft, Search, Sparkles, Swords, Trophy, ChevronRight } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 import { getTimeline, getGoals, getWindow, getMatches, getMatchTeams, getCoachSuggestions } from '../../lib/api';
 import type { Match, MatchWindow } from '../../lib/types';
 import { useMatch } from '../context/MatchContext';
@@ -159,90 +159,219 @@ export function WarRoom() {
         ? [pickerMatch.home_team, pickerMatch.away_team]
         : [];
 
+    // Group matches by competition
+    const grouped = filteredMatches.reduce<Record<string, Match[]>>((acc, m) => {
+      const key = m.competition ?? 'Other';
+      (acc[key] ??= []).push(m);
+      return acc;
+    }, {});
+
     return (
       <div className="h-full flex flex-col bg-collapse-bg text-collapse-text overflow-hidden">
-        <header className="h-16 shrink-0 bg-collapse-surface border-b border-collapse-border px-6 flex items-center">
-          <h1 className="text-xl font-bold">War Room</h1>
-          <span className="ml-3 text-sm text-collapse-muted font-mono">
-            {!pickerMatch ? 'Step 1 — select a match' : 'Step 2 — select your team'}
-          </span>
-        </header>
+        {/* Header */}
+        <div className="shrink-0 px-8 pt-8 pb-4">
+          <div className="flex items-center gap-3 mb-1">
+            <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-collapse-accent to-collapse-purple flex items-center justify-center shadow-lg shadow-collapse-accent/20">
+              <Swords className="w-5 h-5 text-white" />
+            </div>
+            <h1 className="text-2xl font-bold tracking-tight">War Room</h1>
+          </div>
+          <p className="text-collapse-muted text-sm ml-12">Select a match then choose your team to begin analysis</p>
+        </div>
 
-        <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-0 min-h-0">
-          {/* Left — match list */}
-          <div className="flex flex-col border-r border-collapse-border min-h-0">
-            <div className="p-4 border-b border-collapse-border">
+        <div className="flex-1 flex min-h-0 gap-0">
+          {/* Left — match browser */}
+          <div className="flex flex-col min-h-0 w-[55%] border-r border-collapse-border">
+            {/* Search */}
+            <div className="px-6 py-3 border-b border-collapse-border bg-collapse-surface/40">
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-collapse-muted" />
                 <input
                   type="text"
-                  placeholder="Search teams…"
+                  placeholder="Search by team name…"
                   value={filter}
                   onChange={(e) => setFilter(e.target.value)}
-                  className="w-full bg-collapse-bg border border-collapse-border rounded-lg pl-9 pr-4 py-2 text-sm text-collapse-text placeholder:text-collapse-muted focus:border-collapse-accent focus:outline-none"
+                  className="w-full bg-collapse-bg border border-collapse-border rounded-xl pl-9 pr-4 py-2.5 text-sm text-collapse-text placeholder:text-collapse-muted focus:border-collapse-accent focus:outline-none transition-colors"
                 />
               </div>
             </div>
-            <div className="flex-1 overflow-y-auto custom-scrollbar divide-y divide-collapse-border">
+
+            {/* Match cards */}
+            <div className="flex-1 overflow-y-auto custom-scrollbar px-5 py-4 space-y-6">
               {filteredMatches.length === 0 ? (
-                <p className="p-6 text-collapse-muted text-sm text-center">No matches found.</p>
+                <div className="flex flex-col items-center justify-center py-16 text-center gap-3">
+                  <Search className="w-10 h-10 text-collapse-border" />
+                  <p className="text-collapse-muted text-sm">No matches found for "{filter}"</p>
+                </div>
               ) : (
-                filteredMatches.map((m) => (
-                  <button
-                    key={m.match_id}
-                    onClick={() => setPickerMatch(m)}
-                    className={`w-full flex items-center justify-between px-5 py-3.5 text-left transition-colors hover:bg-collapse-surface ${
-                      pickerMatch?.match_id === m.match_id
-                        ? 'bg-collapse-accent/10 border-l-2 border-collapse-accent pl-[18px]'
-                        : ''
-                    }`}
-                  >
-                    <span className="font-medium text-sm">
-                      {m.home_team} <span className="text-collapse-muted">vs</span> {m.away_team}
-                    </span>
-                    <span className="text-xs text-collapse-muted font-mono ml-3 shrink-0">
-                      {m.home_score ?? '?'}–{m.away_score ?? '?'}
-                    </span>
-                  </button>
+                Object.entries(grouped).map(([comp, matches]) => (
+                  <div key={comp}>
+                    <div className="flex items-center gap-2 mb-3">
+                      <Trophy className="w-3.5 h-3.5 text-collapse-warn" />
+                      <span className="text-xs font-bold text-collapse-muted uppercase tracking-widest">{comp}</span>
+                      <div className="flex-1 h-px bg-collapse-border ml-1" />
+                      <span className="text-xs text-collapse-dim">{matches.length} matches</span>
+                    </div>
+                    <div className="grid grid-cols-1 gap-2">
+                      {matches.map((m) => {
+                        const isSelected = pickerMatch?.match_id === m.match_id;
+                        const score = `${m.home_score ?? '?'} – ${m.away_score ?? '?'}`;
+                        const isHighScoring = (m.home_score ?? 0) + (m.away_score ?? 0) >= 4;
+                        return (
+                          <button
+                            key={m.match_id}
+                            onClick={() => setPickerMatch(m)}
+                            className={`group w-full rounded-xl border px-4 py-3 text-left transition-all ${
+                              isSelected
+                                ? 'bg-collapse-accent/10 border-collapse-accent shadow-lg shadow-collapse-accent/10'
+                                : 'bg-collapse-surface border-collapse-border hover:border-collapse-accent/50 hover:bg-collapse-surface/80'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-3 min-w-0 flex-1">
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-2">
+                                    <span className={`font-bold text-sm truncate ${isSelected ? 'text-collapse-accent' : 'text-collapse-text'}`}>
+                                      {m.home_team}
+                                    </span>
+                                    <span className="text-collapse-dim text-xs shrink-0">vs</span>
+                                    <span className={`font-bold text-sm truncate ${isSelected ? 'text-collapse-accent' : 'text-collapse-text'}`}>
+                                      {m.away_team}
+                                    </span>
+                                  </div>
+                                  {m.match_date && (
+                                    <p className="text-[10px] text-collapse-dim mt-0.5 font-mono">{String(m.match_date)}</p>
+                                  )}
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-2 shrink-0 ml-3">
+                                <span className={`font-mono text-sm font-bold ${
+                                  isHighScoring ? 'text-collapse-warn' : isSelected ? 'text-collapse-accent' : 'text-collapse-muted'
+                                }`}>
+                                  {score}
+                                </span>
+                                <ChevronRight className={`w-4 h-4 transition-all ${
+                                  isSelected ? 'text-collapse-accent translate-x-0.5' : 'text-collapse-dim opacity-0 group-hover:opacity-100'
+                                }`} />
+                              </div>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
                 ))
               )}
             </div>
           </div>
 
-          {/* Right — team picker */}
-          <div className="flex flex-col items-center justify-center p-10 gap-6">
-            {!pickerMatch ? (
-              <div className="text-center space-y-2">
-                <div className="w-16 h-16 rounded-full border-2 border-dashed border-collapse-border flex items-center justify-center mx-auto mb-4">
-                  <Search className="w-6 h-6 text-collapse-muted" />
-                </div>
-                <p className="text-collapse-muted text-sm">Select a match from the left to see the teams</p>
-              </div>
-            ) : (
-              <>
-                <div className="text-center">
-                  <p className="font-semibold text-lg">{pickerMatch.home_team} vs {pickerMatch.away_team}</p>
-                  <p className="text-collapse-muted text-sm mt-1 font-mono">
-                    {pickerMatch.home_score ?? '?'} – {pickerMatch.away_score ?? '?'} · {pickerMatch.competition}
+          {/* Right — VS split team selector */}
+          <div className="flex-1 flex flex-col min-h-0 relative overflow-hidden">
+            <AnimatePresence mode="wait">
+              {!pickerMatch ? (
+                <motion.div
+                  key="empty"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="flex-1 flex flex-col items-center justify-center gap-4 p-10 text-center"
+                >
+                  <div className="w-20 h-20 rounded-2xl border-2 border-dashed border-collapse-border flex items-center justify-center mb-2">
+                    <Swords className="w-8 h-8 text-collapse-border" />
+                  </div>
+                  <p className="text-collapse-text font-semibold">No match selected</p>
+                  <p className="text-collapse-muted text-sm max-w-[220px]">
+                    Pick a match from the left to choose which team's collapse risk to analyse
                   </p>
-                </div>
-                <p className="text-sm text-collapse-muted uppercase tracking-wider font-mono">
-                  Which team are you analysing?
-                </p>
-                <div className="w-full max-w-xs space-y-3">
-                  {teamOptions.map((t) => (
+                </motion.div>
+              ) : (
+                <motion.div
+                  key={pickerMatch.match_id}
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -20 }}
+                  transition={{ duration: 0.2 }}
+                  className="flex-1 flex flex-col min-h-0"
+                >
+                  {/* Match title */}
+                  <div className="px-8 py-5 border-b border-collapse-border bg-collapse-surface/30">
+                    <div className="flex items-center gap-2 mb-1">
+                      <Trophy className="w-3.5 h-3.5 text-collapse-warn" />
+                      <span className="text-xs font-bold text-collapse-warn uppercase tracking-widest">{pickerMatch.competition}</span>
+                    </div>
+                    <p className="font-bold text-lg">
+                      {pickerMatch.home_team} <span className="text-collapse-muted font-normal text-base">vs</span> {pickerMatch.away_team}
+                    </p>
+                    <p className="text-collapse-muted text-sm font-mono mt-0.5">
+                      Final score: <span className="text-collapse-text font-bold">{pickerMatch.home_score ?? '?'} – {pickerMatch.away_score ?? '?'}</span>
+                      {pickerMatch.match_date && <span className="ml-3 text-collapse-dim">· {String(pickerMatch.match_date)}</span>}
+                    </p>
+                  </div>
+
+                  {/* VS split */}
+                  <div className="flex-1 flex min-h-0 relative">
+                    {/* Left team */}
                     <button
-                      key={t}
-                      onClick={() => selectTeam(pickerMatch, t)}
-                      className="w-full py-4 rounded-xl border border-collapse-border bg-collapse-surface text-sm font-semibold hover:border-collapse-accent hover:bg-collapse-accent/10 hover:text-collapse-accent transition-all"
+                      onClick={() => selectTeam(pickerMatch, teamOptions[0] ?? pickerMatch.home_team)}
+                      className="flex-1 flex flex-col items-center justify-center gap-4 p-8 group relative overflow-hidden transition-all hover:bg-collapse-accent/5 border-r border-collapse-border"
                     >
-                      {t}
+                      {/* Glow on hover */}
+                      <div className="absolute inset-0 bg-gradient-to-br from-collapse-accent/0 to-collapse-accent/0 group-hover:from-collapse-accent/5 group-hover:to-collapse-purple/5 transition-all duration-300" />
+                      <div className="w-20 h-20 rounded-2xl bg-collapse-elevated border-2 border-collapse-border group-hover:border-collapse-accent/50 flex items-center justify-center relative transition-all duration-300 group-hover:shadow-lg group-hover:shadow-collapse-accent/10">
+                        <span className="text-3xl font-black text-collapse-text group-hover:text-collapse-accent transition-colors">
+                          {(teamOptions[0] ?? pickerMatch.home_team).slice(0, 2).toUpperCase()}
+                        </span>
+                      </div>
+                      <div className="text-center relative">
+                        <p className="font-bold text-lg group-hover:text-collapse-accent transition-colors">
+                          {teamOptions[0] ?? pickerMatch.home_team}
+                        </p>
+                        <p className="text-xs text-collapse-muted mt-0.5">Home</p>
+                      </div>
+                      <div className="flex items-center gap-1.5 px-4 py-2 rounded-full border border-collapse-border group-hover:border-collapse-accent group-hover:bg-collapse-accent/10 transition-all relative">
+                        <span className="text-xs font-semibold text-collapse-muted group-hover:text-collapse-accent transition-colors">Analyse</span>
+                        <ChevronRight className="w-3 h-3 text-collapse-muted group-hover:text-collapse-accent transition-colors" />
+                      </div>
                     </button>
-                  ))}
-                </div>
-                <p className="text-xs text-collapse-muted">Click a team to open the War Room</p>
-              </>
-            )}
+
+                    {/* VS divider */}
+                    <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-10 flex flex-col items-center gap-2 pointer-events-none">
+                      <div className="w-12 h-12 rounded-full bg-collapse-bg border-2 border-collapse-border flex items-center justify-center shadow-lg">
+                        <span className="text-xs font-black text-collapse-muted">VS</span>
+                      </div>
+                    </div>
+
+                    {/* Right team */}
+                    <button
+                      onClick={() => selectTeam(pickerMatch, teamOptions[1] ?? pickerMatch.away_team)}
+                      className="flex-1 flex flex-col items-center justify-center gap-4 p-8 group relative overflow-hidden transition-all hover:bg-collapse-purple/5"
+                    >
+                      <div className="absolute inset-0 bg-gradient-to-bl from-collapse-purple/0 to-collapse-purple/0 group-hover:from-collapse-purple/5 group-hover:to-collapse-accent/5 transition-all duration-300" />
+                      <div className="w-20 h-20 rounded-2xl bg-collapse-elevated border-2 border-collapse-border group-hover:border-collapse-purple/50 flex items-center justify-center relative transition-all duration-300 group-hover:shadow-lg group-hover:shadow-collapse-purple/10">
+                        <span className="text-3xl font-black text-collapse-text group-hover:text-collapse-purple transition-colors">
+                          {(teamOptions[1] ?? pickerMatch.away_team).slice(0, 2).toUpperCase()}
+                        </span>
+                      </div>
+                      <div className="text-center relative">
+                        <p className="font-bold text-lg group-hover:text-collapse-purple transition-colors">
+                          {teamOptions[1] ?? pickerMatch.away_team}
+                        </p>
+                        <p className="text-xs text-collapse-muted mt-0.5">Away</p>
+                      </div>
+                      <div className="flex items-center gap-1.5 px-4 py-2 rounded-full border border-collapse-border group-hover:border-collapse-purple group-hover:bg-collapse-purple/10 transition-all relative">
+                        <span className="text-xs font-semibold text-collapse-muted group-hover:text-collapse-purple transition-colors">Analyse</span>
+                        <ChevronRight className="w-3 h-3 text-collapse-muted group-hover:text-collapse-purple transition-colors" />
+                      </div>
+                    </button>
+                  </div>
+
+                  {/* Footer hint */}
+                  <div className="px-6 py-3 border-t border-collapse-border text-center">
+                    <p className="text-xs text-collapse-dim">Choose a team to analyse their collapse risk trajectory in the War Room</p>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
         </div>
       </div>

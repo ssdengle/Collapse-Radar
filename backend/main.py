@@ -36,17 +36,27 @@ def get_db():
     return duckdb.connect(DB_PATH, read_only=True)
 
 
+INTERNATIONAL_COMPETITIONS = (
+    'FIFA World Cup', 'UEFA Euro', 'Copa America', 'AFC Asian Cup',
+    'Africa Cup of Nations', 'CONCACAF Gold Cup', 'FIFA Confederations Cup',
+    'Olympic Games',
+)
+
 @app.get("/api/matches")
 def get_matches():
     db = get_db()
+    placeholders = ", ".join("?" for _ in INTERNATIONAL_COMPETITIONS)
     rows = db.execute(
-        "SELECT match_id, competition, season, home_team, away_team, "
-        "home_score, away_score, match_date, is_demo_match FROM matches"
+        f"SELECT match_id, competition, season, home_team, away_team, "
+        f"home_score, away_score, match_date, is_demo_match FROM matches "
+        f"WHERE competition IN ({placeholders}) ORDER BY match_date DESC",
+        list(INTERNATIONAL_COMPETITIONS),
     ).fetchall()
     cols = [
         "match_id", "competition", "season", "home_team", "away_team",
         "home_score", "away_score", "match_date", "is_demo_match",
     ]
+    db.close()
     return [dict(zip(cols, r)) for r in rows]
 
 
@@ -283,8 +293,10 @@ def get_team_risk():
     """Return average collapse risk per national team across all World Cup matches."""
     from synthetic_data import synthetic_timeline
     db = get_db()
+    placeholders = ", ".join("?" for _ in INTERNATIONAL_COMPETITIONS)
     rows = db.execute(
-        "SELECT match_id, home_team, away_team FROM matches WHERE competition = 'FIFA World Cup'"
+        f"SELECT match_id, home_team, away_team FROM matches WHERE competition IN ({placeholders})",
+        list(INTERNATIONAL_COMPETITIONS),
     ).fetchall()
     db.close()
 
@@ -318,8 +330,9 @@ def get_top_matches():
     from synthetic_data import synthetic_timeline
     db = get_db()
     rows = db.execute(
-        "SELECT match_id, competition, home_team, away_team, home_score, away_score, match_date "
-        "FROM matches WHERE competition = 'FIFA World Cup' ORDER BY match_id"
+        f"SELECT match_id, competition, home_team, away_team, home_score, away_score, match_date "
+        f"FROM matches WHERE competition IN ({', '.join('?' for _ in INTERNATIONAL_COMPETITIONS)}) ORDER BY match_id",
+        list(INTERNATIONAL_COMPETITIONS),
     ).fetchall()
 
     results = []

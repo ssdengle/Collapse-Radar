@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useSyncExternalStore } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { MapContainer, TileLayer, CircleMarker, Popup, useMap, ZoomControl } from 'react-leaflet';
 import {
@@ -79,6 +79,17 @@ const fixtures = [
 
 type Fixture = typeof fixtures[number];
 
+// Swaps tiles when theme changes — using key forces remount
+function ThemedTileLayer({ isLight }: { isLight: boolean }) {
+  return (
+    <TileLayer
+      key={isLight ? 'light' : 'dark'}
+      url={isLight ? TILE_LIGHT : TILE_DARK}
+      attribution='&copy; <a href="https://carto.com/">CARTO</a>'
+    />
+  );
+}
+
 function FlyToVenue({ venue }: { venue: WC2026Venue | null }) {
   const map = useMap();
   useEffect(() => {
@@ -87,7 +98,23 @@ function FlyToVenue({ venue }: { venue: WC2026Venue | null }) {
   return null;
 }
 
+// Reactively track html.light class changes
+function useIsLightMode() {
+  return useSyncExternalStore(
+    (cb) => {
+      const obs = new MutationObserver(cb);
+      obs.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+      return () => obs.disconnect();
+    },
+    () => document.documentElement.classList.contains('light'),
+  );
+}
+
+const TILE_DARK  = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+const TILE_LIGHT = 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
+
 export function WorldCupContext() {
+  const isLight = useIsLightMode();
   const { data: venues = [] } = useQuery({
     queryKey: ['wc2026-venues'],
     queryFn: getWC2026Venues,
@@ -149,14 +176,11 @@ export function WorldCupContext() {
         <MapContainer
           center={[38, -98]}
           zoom={4}
-          style={{ position: 'absolute', inset: 0, background: '#0F172A' }}
+          style={{ position: 'absolute', inset: 0, background: isLight ? '#E8EDF2' : '#0F172A' }}
           zoomControl={false}
           className="leaflet-container-dark"
         >
-          <TileLayer
-            url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-            attribution='&copy; <a href="https://carto.com/">CARTO</a>'
-          />
+          <ThemedTileLayer isLight={isLight} />
           <ZoomControl position="bottomleft" />
           <FlyToVenue venue={focusedVenue} />
 
@@ -209,7 +233,7 @@ export function WorldCupContext() {
                         { icon: <Droplets className="w-3 h-3 text-collapse-accent" />,     val: `${venue.humidity_pct}%`, lbl: 'Humid.' },
                         { icon: <MapPin className="w-3 h-3 text-collapse-muted" />,         val: `${venue.elevation_ft}ft`, lbl: 'Elev.' },
                       ].map(({ icon, val, lbl }) => (
-                        <div key={lbl} className="bg-collapse-bg rounded p-1.5 text-center">
+                        <div key={lbl} className="bg-collapse-elevated rounded p-1.5 text-center">
                           <div className="flex justify-center mb-0.5">{icon}</div>
                           <div className="font-mono font-bold text-xs text-collapse-text">{val}</div>
                           <div className="text-[10px] text-collapse-muted">{lbl}</div>

@@ -118,33 +118,55 @@
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
 
-  /* Custom Collapse Theme Colors */
-  --color-collapse-bg: #080D14;
-  --color-collapse-surface: #0D1520;
-  --color-collapse-elevated: #111B2A;
-  --color-collapse-border: #1C2D40;
-  --color-collapse-hover: #162236;
-  
-  --color-collapse-text: #F1F5F9;
-  --color-collapse-muted: #94A3B8;
-  --color-collapse-dim: #475569;
-  
-  --color-collapse-accent: #0EA5E9;
-  --color-collapse-purple: #7C3AED;
-  --color-collapse-violet: #7C3AED;
-  
-  --color-collapse-safe: #0BDE8C;
-  --color-collapse-warn: #F5A623;
-  --color-collapse-risk: #FF3B5C;
+  /* Custom Collapse Theme Colors — reference runtime vars so light/dark toggle works */
+  --color-collapse-bg:       var(--c-bg);
+  --color-collapse-surface:  var(--c-surface);
+  --color-collapse-elevated: var(--c-elevated);
+  --color-collapse-border:   var(--c-border);
+  --color-collapse-hover:    var(--c-hover);
+  --color-collapse-text:     var(--c-text);
+  --color-collapse-muted:    var(--c-muted);
+  --color-collapse-dim:      var(--c-dim);
+
+  /* Fixed accent/status colors (same in both themes) */
+  --color-collapse-accent:   #0EA5E9;
+  --color-collapse-purple:   #7C3AED;
+  --color-collapse-violet:   #7C3AED;
+  --color-collapse-safe:     #0BDE8C;
+  --color-collapse-warn:     #F5A623;
+  --color-collapse-risk:     #FF3B5C;
   --color-collapse-critical: #FF0A3C;
-  
-  --color-collapse-cusum: #34D399;
-  --color-collapse-counter: #0BDE8C;
-  --color-collapse-goal: #FF3B5C;
+  --color-collapse-cusum:    #34D399;
+  --color-collapse-counter:  #0BDE8C;
+  --color-collapse-goal:     #FF3B5C;
 
   /* Custom Fonts */
   --font-sans: "Inter", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", "Courier New", monospace;
+}
+
+/* ── Dark theme (default) ── */
+:root {
+  --c-bg:       #080D14;
+  --c-surface:  #0D1520;
+  --c-elevated: #111B2A;
+  --c-border:   #1C2D40;
+  --c-hover:    #162236;
+  --c-text:     #F1F5F9;
+  --c-muted:    #94A3B8;
+  --c-dim:      #475569;
+}
+
+/* ── Light theme ── */
+html.light {
+  --c-bg:       #F1F5F9;
+  --c-surface:  #FFFFFF;
+  --c-elevated: #E2EBF6;
+  --c-border:   #CBD5E1;
+  --c-hover:    #DBEAFE;
+  --c-text:     #0F172A;
+  --c-muted:    #475569;
+  --c-dim:      #94A3B8;
 }
 
 @layer base {
