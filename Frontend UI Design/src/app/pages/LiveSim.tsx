@@ -5,7 +5,7 @@ import {
   ReferenceLine, CartesianGrid,
 } from 'recharts';
 import { motion, AnimatePresence } from 'motion/react';
-import { Play, Pause, RotateCcw, Zap, Users, Brain, Flame, Heart, Trophy, ChevronDown, Globe, Medal, AlertTriangle, ChevronRight } from 'lucide-react';
+import { Play, Pause, RotateCcw, Zap, Users, Brain, Flame, Heart, Trophy, ChevronDown, Globe, Medal, AlertTriangle, ChevronRight, Radio } from 'lucide-react';
 import { API_BASE } from '../../lib/api';
 
 const get = (url: string) => fetch(`${API_BASE}${url}`).then(r => r.json());
