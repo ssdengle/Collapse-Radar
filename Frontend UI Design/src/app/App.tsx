@@ -8,6 +8,7 @@ import { CoachView } from './pages/CoachView';
 import { CoachLineup } from './pages/CoachLineup';
 import { PlayerPortal } from './pages/PlayerPortal';
 import { WorldCupContext } from './pages/WorldCupContext';
+import { LiveSim } from './pages/LiveSim';
 import { NotFound } from './pages/NotFound';
 import { CollapseOSTheme } from './pages/ThemeShowcase';
 import '../styles/leaflet-overrides.css';
@@ -117,6 +118,7 @@ export default function App() {
               <Route path="coach-lineup" element={<CoachLineup />} />
               <Route path="player-portal" element={<PlayerPortal />} />
               <Route path="wc-2026" element={<WorldCupContext />} />
+              <Route path="live-sim" element={<LiveSim />} />
               <Route path="theme" element={<CollapseOSTheme />} />
               <Route path="*" element={<NotFound />} />
             </Route>

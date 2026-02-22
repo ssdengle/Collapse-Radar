@@ -20,7 +20,7 @@ export function ThemeToggle({ theme, onToggle }: Props) {
       <span className={`relative inline-flex h-5 w-10 rounded-full transition-colors ${isDark ? 'bg-slate-700' : 'bg-slate-300'}`}>
         <span
           className={`absolute top-0.5 h-4 w-4 rounded-full transition-transform duration-200 ${
-            isDark ? 'translate-x-5 bg-white' : 'translate-x-0.5 bg-black'
+            isDark ? 'translate-x-0.5 bg-white' : 'translate-x-5 bg-black'
           }`}
         />
       </span>

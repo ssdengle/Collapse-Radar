@@ -1815,3 +1815,174 @@ def get_player_impact(team: str, player_id: int):
     }
 
     return {"name": name, "team": team, "role": player_role, "windows": windows, "splits": splits, "plans": plans}
+
+
+# ── WC 2026 Live Simulation ────────────────────────────────────────────────
+@app.get("/api/wc2026/live-sim")
+def wc2026_live_sim(team_a: str = "France", team_b: str = "Brazil"):
+    """Full 90-min mock real-time simulation with psychological & sentiment features."""
+    import hashlib, numpy as np
+
+    seed = int(hashlib.md5(f"{team_a}-{team_b}".encode()).hexdigest()[:8], 16) % 99999
+    rng = np.random.default_rng(seed)
+
+    try:
+        db = get_db()
+        fp_a = _team_fingerprint(_SQUAD_ALIASES.get(team_a, team_a), db)
+        fp_b = _team_fingerprint(_SQUAD_ALIASES.get(team_b, team_b), db)
+        db.close()
+    except Exception:
+        fp_a = {"burstiness": 0.30, "turnover_pm": 0.20, "territory_tilt": 0.50,
+                "tempo_variance": 0.30, "def_actions_pm": 0.40, "pass_acc_slope": 0.0}
+        fp_b = {"burstiness": 0.25, "turnover_pm": 0.18, "territory_tilt": 0.50,
+                "tempo_variance": 0.25, "def_actions_pm": 0.35, "pass_acc_slope": 0.0}
+
+    RIVALRIES = {
+        frozenset(["France",      "Brazil"]):      0.82,
+        frozenset(["Argentina",   "Brazil"]):      0.95,
+        frozenset(["Argentina",   "England"]):     0.88,
+        frozenset(["Germany",     "England"]):     0.85,
+        frozenset(["Spain",       "Portugal"]):    0.78,
+        frozenset(["USA",         "Mexico"]):      0.80,
+        frozenset(["Netherlands", "Germany"]):     0.82,
+        frozenset(["Argentina",   "France"]):      0.92,
+        frozenset(["Brazil",      "Germany"]):     0.88,
+        frozenset(["England",     "France"]):      0.76,
+        frozenset(["Spain",       "Germany"]):     0.79,
+        frozenset(["Portugal",    "France"]):      0.74,
+        frozenset(["Croatia",     "Brazil"]):      0.70,
+        frozenset(["Morocco",     "France"]):      0.75,
+        frozenset(["Japan",       "Spain"]):       0.68,
+    }
+    rivalry = RIVALRIES.get(frozenset([team_a, team_b]), 0.50)
+
+    def _squad(team: str):
+        return _SQUADS.get(_SQUAD_ALIASES.get(team, team),
+                           [(f"Player {i+1}", "MF") for i in range(18)])
+
+    def _pick(squad, idx: int) -> str:
+        e = squad[int(idx) % len(squad)]
+        return e[0] if isinstance(e, tuple) else e
+
+    squad_a = _squad(team_a)
+    squad_b = _squad(team_b)
+
+    base_risk_a = fp_a.get("burstiness", 0.3)*0.35 + fp_a.get("turnover_pm", 0.2)*0.35 + 0.15
+    sub_mins = sorted(rng.choice(range(50, 85), size=3, replace=False).tolist())
+
+    minutes_data = []
+    events = []
+    score_a = score_b = 0
+    prob = float(base_risk_a)
+    momentum_a = 0.50
+
+    for minute in range(1, 91):
+        # ── Physical fatigue ──────────────────────────────────────────────
+        fatigue = min(0.95, 0.08 + (minute / 90) * 0.65 + fp_a.get("burstiness", 0.3) * 0.12)
+        if minute in sub_mins:
+            fatigue = max(0.08, fatigue - 0.08)
+
+        # ── Psychological stress (score × time pressure) ──────────────────
+        deficit = score_b - score_a
+        time_pressure = minute / 90.0
+        psych = min(0.95, max(0.05,
+            0.18 + max(0, deficit) * 0.28 * time_pressure
+            + fp_a.get("tempo_variance", 0.3) * 0.18
+            + rivalry * 0.08
+            + (0.14 if minute > 80 else 0.0)
+        ))
+
+        # ── Crowd / sentiment pressure ────────────────────────────────────
+        crowd = min(0.95, max(0.28,
+            0.58 + rivalry * 0.14
+            + (0.09 if deficit > 0 else 0.0)
+            + (0.07 if minute > 75 else 0.0)
+            + float(rng.uniform(-0.04, 0.04))
+        ))
+
+        # ── Momentum (territory + recency) ───────────────────────────────
+        raw_mom = 0.5 - (fp_a.get("territory_tilt", 0.5) - 0.5) + float(rng.uniform(-0.04, 0.04))
+        momentum_a = float(np.clip(0.80 * momentum_a + 0.20 * raw_mom, 0.05, 0.95))
+
+        # ── Collapse probability ──────────────────────────────────────────
+        push = psych * 0.28 + (1 - momentum_a) * 0.24 + fatigue * 0.14
+        prob = float(np.clip(prob * 0.86 + push * 0.14 + rng.uniform(-0.018, 0.018), 0.05, 0.92))
+        if fp_a.get("burstiness", 0) > 0.38 and rng.random() < 0.09:
+            prob = float(min(0.92, prob + rng.uniform(0.04, 0.11)))
+
+        minutes_data.append({
+            "minute": minute,
+            "score_a": score_a, "score_b": score_b,
+            "collapse_prob":        round(prob, 3),
+            "crowd_pressure":       round(crowd, 3),
+            "momentum":             round(momentum_a, 3),
+            "psychological_stress": round(psych, 3),
+            "physical_fatigue":     round(fatigue, 3),
+            "rivalry_index":        round(rivalry, 3),
+            "pass_acc_slope":       round(float(rng.uniform(-0.04, 0.03)) - fatigue * 0.015, 3),
+            "turnover_burstiness":  round(fp_a.get("burstiness", 0.3) + float(rng.uniform(-0.04, 0.04)), 3),
+            "territory_tilt":       round(fp_a.get("territory_tilt", 0.5) + float(rng.uniform(-0.04, 0.04)), 3),
+        })
+
+        # ── Goal generation ───────────────────────────────────────────────
+        gp_b = prob * 0.038
+        gp_a = (1 - prob) * 0.028
+        if minute > 10 and rng.random() < gp_b:
+            score_b += 1
+            events.append({"minute": minute, "type": "goal", "team": team_b,
+                "player": _pick(squad_b, int(rng.integers(0, min(11, len(squad_b))))),
+                "score_a": score_a, "score_b": score_b,
+                "description": f"{team_b} capitalise on {team_a} collapse window"})
+            prob = float(min(0.92, prob + 0.11))
+            momentum_a = float(max(0.05, momentum_a - 0.22))
+        elif minute > 10 and rng.random() < gp_a:
+            score_a += 1
+            events.append({"minute": minute, "type": "goal", "team": team_a,
+                "player": _pick(squad_a, int(rng.integers(0, min(11, len(squad_a))))),
+                "score_a": score_a, "score_b": score_b,
+                "description": f"{team_a} score — stability restored, psychological pressure drops"})
+            prob = float(max(0.05, prob - 0.09))
+            momentum_a = float(min(0.95, momentum_a + 0.22))
+
+        # ── Yellow cards ──────────────────────────────────────────────────
+        if rng.random() < 0.014 and minute > 20:
+            is_a = rng.random() < 0.5
+            squad = squad_a if is_a else squad_b
+            events.append({"minute": minute, "type": "card", "card": "yellow",
+                "team": team_a if is_a else team_b,
+                "player": _pick(squad, int(rng.integers(0, min(11, len(squad))))),
+                "description": "Tactical foul — disrupting counter-attack transition"})
+
+        # ── Momentum shifts ───────────────────────────────────────────────
+        if len(minutes_data) >= 6:
+            prev = minutes_data[-6]["collapse_prob"]
+            if abs(prob - prev) > 0.11:
+                rising = prob > prev
+                events.append({"minute": minute, "type": "momentum_shift",
+                    "description": ("Collapse risk rising sharply — pressure phase building, "
+                                    "psychological stress elevated"
+                                    if rising else
+                                    "Stability restored — momentum shifting, crowd pressure easing"),
+                    "score_a": score_a, "score_b": score_b})
+
+        # ── Substitutions ─────────────────────────────────────────────────
+        if minute in sub_mins:
+            is_a = rng.random() < 0.5
+            squad = squad_a if is_a else squad_b
+            bench = max(11, len(squad) - 7)
+            events.append({"minute": minute, "type": "substitution",
+                "team": team_a if is_a else team_b,
+                "player_off": _pick(squad, int(rng.integers(4, 11))),
+                "player_on":  _pick(squad, bench + int(rng.integers(0, max(1, len(squad) - bench)))),
+                "description": "Fresh legs — tactical fatigue management"})
+
+    events.append({"minute": 90, "type": "fulltime",
+        "score_a": score_a, "score_b": score_b,
+        "description": (f"Full time — {team_a} {score_a}–{score_b} {team_b}. "
+                        + ("Draw" if score_a == score_b
+                           else f"{'Win' if score_a > score_b else 'Loss'} for {team_a}"))})
+    events.sort(key=lambda e: e["minute"])
+
+    return {"team_a": team_a, "team_b": team_b, "rivalry_index": rivalry,
+            "final_score": {"team_a": score_a, "team_b": score_b},
+            "minutes": minutes_data, "events": events}

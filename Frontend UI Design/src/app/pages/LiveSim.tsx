@@ -1,0 +1,539 @@
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import {
+  AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
+  ReferenceLine, CartesianGrid,
+} from 'recharts';
+import { motion, AnimatePresence } from 'motion/react';
+import { Play, Pause, RotateCcw, Zap, Users, Brain, Flame, Heart, Trophy, ChevronDown } from 'lucide-react';
+import { API_BASE } from '../../lib/api';
+
+const get = (url: string) => fetch(`${API_BASE}${url}`).then(r => r.json());
+
+// ── Types ──────────────────────────────────────────────────────────────────
+interface MinuteData {
+  minute: number;
+  score_a: number; score_b: number;
+  collapse_prob: number;
+  crowd_pressure: number;
+  momentum: number;
+  psychological_stress: number;
+  physical_fatigue: number;
+  rivalry_index: number;
+  pass_acc_slope: number;
+  turnover_burstiness: number;
+  territory_tilt: number;
+}
+
+interface SimEvent {
+  minute: number;
+  type: 'goal' | 'card' | 'momentum_shift' | 'substitution' | 'fulltime';
+  team?: string;
+  player?: string;
+  player_off?: string;
+  player_on?: string;
+  card?: string;
+  score_a?: number;
+  score_b?: number;
+  description: string;
+}
+
+interface SimData {
+  team_a: string; team_b: string;
+  rivalry_index: number;
+  final_score: { team_a: number; team_b: number };
+  minutes: MinuteData[];
+  events: SimEvent[];
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+const SPEED_OPTIONS = [0.5, 1, 2, 4] as const;
+type Speed = typeof SPEED_OPTIONS[number];
+
+function riskColor(v: number) {
+  if (v < 0.35) return '#22c55e';
+  if (v < 0.55) return '#f59e0b';
+  return '#ef4444';
+}
+
+function pct(v: number) { return `${Math.round(v * 100)}%`; }
+
+function eventIcon(type: SimEvent['type']) {
+  switch (type) {
+    case 'goal':          return '⚽';
+    case 'card':          return '🟨';
+    case 'momentum_shift':return '⚡';
+    case 'substitution':  return '🔄';
+    case 'fulltime':      return '🏁';
+    default:              return '•';
+  }
+}
+
+// ── Psychological feature bar ──────────────────────────────────────────────
+function PsychBar({
+  label, value, icon: Icon, color, description,
+}: {
+  label: string; value: number; icon: any; color: string; description: string;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-1.5">
+          <Icon className="w-3.5 h-3.5" style={{ color }}/>
+          <span className="text-xs font-semibold text-collapse-text">{label}</span>
+        </div>
+        <span className="text-xs font-mono font-bold" style={{ color }}>{pct(value)}</span>
+      </div>
+      <div className="h-2 rounded-full bg-collapse-border overflow-hidden">
+        <motion.div className="h-full rounded-full transition-all duration-500"
+          style={{ width: `${value * 100}%`, background: color }}
+          layout/>
+      </div>
+      <p className="text-[9px] text-collapse-dim leading-tight">{description}</p>
+    </div>
+  );
+}
+
+// ── Team selector ──────────────────────────────────────────────────────────
+function TeamSelect({ value, onChange, options, label }: {
+  value: string; onChange: (v: string) => void; options: string[]; label: string;
+}) {
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-[10px] font-bold uppercase tracking-wider text-collapse-muted">{label}</span>
+      <div className="relative">
+        <select value={value} onChange={e => onChange(e.target.value)}
+          className="appearance-none w-full bg-collapse-surface border border-collapse-border rounded-xl px-4 py-2.5 pr-9 text-sm font-semibold text-collapse-text focus:border-collapse-accent focus:outline-none cursor-pointer min-w-[160px]">
+          {options.map(o => <option key={o} value={o}>{o}</option>)}
+        </select>
+        <ChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-collapse-muted"/>
+      </div>
+    </div>
+  );
+}
+
+// ── Custom tooltip ─────────────────────────────────────────────────────────
+function LiveTooltip({ active, payload, label }: any) {
+  if (!active || !payload?.length) return null;
+  const d: MinuteData = payload[0]?.payload;
+  if (!d) return null;
+  return (
+    <div className="bg-[rgba(10,18,40,0.97)] border border-collapse-border rounded-xl p-3 text-xs space-y-1 shadow-xl min-w-[180px]">
+      <p className="font-bold text-collapse-muted mb-1.5">{label}'</p>
+      <p className="flex justify-between gap-4"><span className="text-collapse-muted">Collapse risk</span><span className="font-mono font-bold" style={{ color: riskColor(d.collapse_prob) }}>{pct(d.collapse_prob)}</span></p>
+      <p className="flex justify-between gap-4"><span className="text-collapse-muted">Crowd pressure</span><span className="font-mono text-sky-400">{pct(d.crowd_pressure)}</span></p>
+      <p className="flex justify-between gap-4"><span className="text-collapse-muted">Momentum</span><span className="font-mono text-emerald-400">{pct(d.momentum)}</span></p>
+      <p className="flex justify-between gap-4"><span className="text-collapse-muted">Psych stress</span><span className="font-mono text-purple-400">{pct(d.psychological_stress)}</span></p>
+      <p className="flex justify-between gap-4"><span className="text-collapse-muted">Fatigue</span><span className="font-mono text-amber-400">{pct(d.physical_fatigue)}</span></p>
+    </div>
+  );
+}
+
+// ── WC 2026 teams ──────────────────────────────────────────────────────────
+const WC2026_TEAMS = [
+  'Argentina','Australia','Belgium','Brazil','Cameroon','Canada',
+  'Croatia','Denmark','Ecuador','England','France','Germany',
+  'Ghana','Iran','Japan','Mexico','Morocco','Netherlands',
+  'Poland','Portugal','Qatar','Saudi Arabia','Senegal','Serbia',
+  'South Korea','Spain','Switzerland','Tunisia','USA','Uruguay','Wales',
+];
+
+// ── Main component ─────────────────────────────────────────────────────────
+export function LiveSim() {
+  const [teamA, setTeamA]   = useState('France');
+  const [teamB, setTeamB]   = useState('Brazil');
+  const [running, setRunning] = useState(false);
+  const [currentMin, setCurrentMin] = useState(0);
+  const [speed, setSpeed]   = useState<Speed>(1);
+  const [started, setStarted] = useState(false);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const { data: sim, isLoading, refetch } = useQuery<SimData>({
+    queryKey: ['live-sim', teamA, teamB],
+    queryFn: () => get(`/api/wc2026/live-sim?team_a=${encodeURIComponent(teamA)}&team_b=${encodeURIComponent(teamB)}`),
+    enabled: false,
+  });
+
+  // Start simulation
+  const startSim = useCallback(() => {
+    if (!sim) return;
+    setCurrentMin(0);
+    setStarted(true);
+    setRunning(true);
+  }, [sim]);
+
+  // Tick
+  useEffect(() => {
+    if (!running || !sim) return;
+    const ms = Math.round(1000 / speed);
+    intervalRef.current = setInterval(() => {
+      setCurrentMin(prev => {
+        if (prev >= 90) { setRunning(false); return 90; }
+        return prev + 1;
+      });
+    }, ms);
+    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
+  }, [running, speed, sim]);
+
+  // Pause at 90
+  useEffect(() => { if (currentMin >= 90) setRunning(false); }, [currentMin]);
+
+  // Load simulation on team change
+  const handleLoad = () => {
+    setStarted(false);
+    setCurrentMin(0);
+    setRunning(false);
+    refetch();
+  };
+
+  const reset = () => {
+    setRunning(false);
+    setCurrentMin(0);
+    setStarted(false);
+  };
+
+  // Visible data (up to current minute)
+  const visibleMinutes: MinuteData[] = sim
+    ? sim.minutes.slice(0, Math.max(1, currentMin))
+    : [];
+
+  const currentData = visibleMinutes[visibleMinutes.length - 1];
+  const scoreA = currentData?.score_a ?? 0;
+  const scoreB = currentData?.score_b ?? 0;
+
+  // Events up to current minute (reverse for feed)
+  const visibleEvents = sim
+    ? [...sim.events]
+        .filter(e => e.minute <= currentMin && e.type !== 'fulltime')
+        .reverse()
+        .slice(0, 12)
+    : [];
+
+  const isFulltime = currentMin >= 90;
+
+  return (
+    <div className="h-full flex flex-col bg-collapse-bg text-collapse-text overflow-hidden">
+      {/* Header */}
+      <div className="shrink-0 px-8 pt-6 pb-0 border-b border-collapse-border bg-collapse-surface">
+        <div className="flex items-center justify-between mb-5">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-red-500 to-orange-500 flex items-center justify-center shadow-lg shadow-red-500/20">
+              <Zap className="w-5 h-5 text-white"/>
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h1 className="text-xl font-bold tracking-tight">Live Simulation</h1>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded border uppercase tracking-wide bg-purple-500/10 text-purple-400 border-purple-500/20">WC 2026</span>
+                {running && (
+                  <span className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded bg-red-500/10 border border-red-500/30 text-red-400">
+                    <span className="w-1.5 h-1.5 rounded-full bg-red-400 animate-pulse"/>LIVE
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-collapse-muted">Collapse probability · Sentiment · Psychological pressure · Real-time</p>
+            </div>
+          </div>
+
+          {/* Team pickers + load */}
+          <div className="flex items-end gap-3">
+            <TeamSelect value={teamA} onChange={setTeamA} options={WC2026_TEAMS} label="Team A"/>
+            <span className="text-collapse-muted text-lg font-bold mb-2">vs</span>
+            <TeamSelect value={teamB} onChange={v => v !== teamA ? setTeamB(v) : null} options={WC2026_TEAMS.filter(t => t !== teamA)} label="Team B"/>
+            <button onClick={handleLoad} disabled={isLoading}
+              className="mb-0.5 flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-collapse-accent text-white text-sm font-bold hover:bg-collapse-accent/80 transition-all disabled:opacity-50">
+              {isLoading ? <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin"/> : <Zap className="w-4 h-4"/>}
+              {isLoading ? 'Loading…' : 'Load Match'}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Body */}
+      {!sim && !isLoading ? (
+        <div className="flex-1 flex flex-col items-center justify-center gap-5 text-center">
+          <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-red-500/10 to-orange-500/10 border border-red-500/20 flex items-center justify-center">
+            <Zap className="w-9 h-9 text-red-400"/>
+          </div>
+          <div>
+            <p className="text-lg font-bold text-collapse-text mb-1">WC 2026 Live Simulation</p>
+            <p className="text-sm text-collapse-muted max-w-md">
+              Pick two teams and click Load Match to generate a full 90-minute simulation with real-time collapse probability, crowd sentiment, and psychological pressure tracking.
+            </p>
+          </div>
+        </div>
+      ) : isLoading ? (
+        <div className="flex-1 flex items-center justify-center gap-3 text-collapse-muted text-sm">
+          <span className="w-5 h-5 border-2 border-collapse-border border-t-collapse-accent rounded-full animate-spin"/>
+          Generating match simulation…
+        </div>
+      ) : sim && (
+        <div className="flex-1 overflow-hidden flex flex-col min-h-0">
+          {/* Score bar + controls */}
+          <div className="shrink-0 px-8 py-4 border-b border-collapse-border bg-collapse-surface/50 flex items-center justify-between">
+            {/* Score */}
+            <div className="flex items-center gap-6">
+              <div className="text-center">
+                <p className="text-[10px] font-bold text-collapse-muted uppercase tracking-wider">{sim.team_a}</p>
+                <p className="text-4xl font-black font-mono text-collapse-text leading-none mt-0.5">{scoreA}</p>
+              </div>
+              <div className="text-center space-y-1">
+                <div className="text-xl font-black text-collapse-muted">–</div>
+                <div className="text-[10px] font-bold font-mono text-collapse-muted">{started ? `${currentMin}'` : '0\''}</div>
+              </div>
+              <div className="text-center">
+                <p className="text-[10px] font-bold text-collapse-muted uppercase tracking-wider">{sim.team_b}</p>
+                <p className="text-4xl font-black font-mono text-collapse-text leading-none mt-0.5">{scoreB}</p>
+              </div>
+              {isFulltime && (
+                <span className="ml-4 text-xs font-bold px-3 py-1.5 rounded-full bg-collapse-border text-collapse-muted">FULL TIME</span>
+              )}
+            </div>
+
+            {/* Rivalry badge */}
+            <div className="hidden md:flex items-center gap-2 bg-collapse-surface border border-collapse-border rounded-xl px-3 py-2">
+              <Heart className="w-3.5 h-3.5 text-red-400"/>
+              <span className="text-[10px] font-bold text-collapse-muted">Rivalry</span>
+              <span className="text-sm font-black font-mono text-red-400">{pct(sim.rivalry_index)}</span>
+            </div>
+
+            {/* Controls */}
+            <div className="flex items-center gap-2">
+              {/* Speed */}
+              <div className="flex rounded-lg overflow-hidden border border-collapse-border text-[10px] font-bold">
+                {SPEED_OPTIONS.map(s => (
+                  <button key={s} onClick={() => setSpeed(s)}
+                    className={`px-2.5 py-1.5 transition-all ${speed === s ? 'bg-collapse-accent text-white' : 'bg-collapse-surface text-collapse-muted hover:text-collapse-text'}`}>
+                    {s}×
+                  </button>
+                ))}
+              </div>
+              {/* Play/Pause */}
+              <button onClick={() => started ? setRunning(r => !r) : startSim()}
+                disabled={isFulltime && started}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-collapse-accent text-white text-sm font-bold hover:bg-collapse-accent/80 transition-all disabled:opacity-40">
+                {running ? <Pause className="w-4 h-4"/> : <Play className="w-4 h-4"/>}
+                {running ? 'Pause' : started ? 'Resume' : 'Start'}
+              </button>
+              {/* Reset */}
+              <button onClick={reset}
+                className="p-2 rounded-xl border border-collapse-border text-collapse-muted hover:text-collapse-text hover:border-collapse-accent transition-all">
+                <RotateCcw className="w-4 h-4"/>
+              </button>
+            </div>
+          </div>
+
+          {/* Main grid */}
+          <div className="flex-1 overflow-hidden grid grid-cols-[1fr_320px] min-h-0">
+            {/* Left — chart + event feed */}
+            <div className="flex flex-col min-h-0 border-r border-collapse-border">
+              {/* Collapse probability chart */}
+              <div className="shrink-0 p-6 pb-2">
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <p className="text-sm font-bold text-collapse-text">Collapse Probability — {sim.team_a}</p>
+                    <p className="text-[10px] text-collapse-muted mt-0.5">
+                      Logistic model · 5 psychological features · rivalry-weighted
+                    </p>
+                  </div>
+                  {currentData && (
+                    <div className="text-right">
+                      <p className="text-2xl font-black font-mono" style={{ color: riskColor(currentData.collapse_prob) }}>
+                        {pct(currentData.collapse_prob)}
+                      </p>
+                      <p className="text-[10px] text-collapse-muted">current risk</p>
+                    </div>
+                  )}
+                </div>
+                <ResponsiveContainer width="100%" height={200}>
+                  <AreaChart data={visibleMinutes} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+                    <defs>
+                      <linearGradient id="riskGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%"  stopColor="#ef4444" stopOpacity={0.35}/>
+                        <stop offset="95%" stopColor="#ef4444" stopOpacity={0.02}/>
+                      </linearGradient>
+                      <linearGradient id="momGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%"  stopColor="#22c55e" stopOpacity={0.2}/>
+                        <stop offset="95%" stopColor="#22c55e" stopOpacity={0.02}/>
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid stroke="rgba(148,163,184,0.06)" vertical={false}/>
+                    <XAxis dataKey="minute" tick={{ fill: '#64748B', fontSize: 9 }} tickLine={false} axisLine={false} tickFormatter={v => `${v}'`}/>
+                    <YAxis tick={{ fill: '#64748B', fontSize: 9 }} tickLine={false} axisLine={false} domain={[0, 1]} tickFormatter={v => `${Math.round(v*100)}%`}/>
+                    <Tooltip content={<LiveTooltip/>}/>
+                    <ReferenceLine y={0.5} stroke="#f59e0b" strokeDasharray="4 2" strokeWidth={1}
+                      label={{ value: '50% threshold', fill: '#f59e0b', fontSize: 8, position: 'insideTopLeft' }}/>
+                    {/* Mark goal events */}
+                    {sim.events.filter(e => e.type === 'goal' && e.minute <= currentMin).map((e, i) => (
+                      <ReferenceLine key={i} x={e.minute} stroke={e.team === sim.team_a ? '#22c55e' : '#ef4444'}
+                        strokeDasharray="3 2" strokeWidth={1.5}
+                        label={{ value: e.team === sim.team_a ? '⚽A' : '⚽B', fill: e.team === sim.team_a ? '#22c55e' : '#ef4444', fontSize: 8 }}/>
+                    ))}
+                    <Area type="monotone" dataKey="momentum" stroke="#22c55e" strokeWidth={1}
+                      fill="url(#momGrad)" dot={false} name="Momentum"/>
+                    <Area type="monotone" dataKey="collapse_prob" stroke="#ef4444" strokeWidth={2}
+                      fill="url(#riskGrad)" dot={false} name="Collapse Risk" isAnimationActive={false}/>
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+
+              {/* Sentiment overlay chart */}
+              <div className="shrink-0 px-6 pb-2">
+                <p className="text-[10px] font-bold text-collapse-muted uppercase tracking-wider mb-2">Crowd Sentiment & Psychological Pressure</p>
+                <ResponsiveContainer width="100%" height={100}>
+                  <AreaChart data={visibleMinutes} margin={{ top: 2, right: 8, left: -20, bottom: 0 }}>
+                    <defs>
+                      <linearGradient id="crowdGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%"  stopColor="#0ea5e9" stopOpacity={0.3}/>
+                        <stop offset="95%" stopColor="#0ea5e9" stopOpacity={0.02}/>
+                      </linearGradient>
+                      <linearGradient id="psychGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%"  stopColor="#a855f7" stopOpacity={0.3}/>
+                        <stop offset="95%" stopColor="#a855f7" stopOpacity={0.02}/>
+                      </linearGradient>
+                    </defs>
+                    <XAxis dataKey="minute" tick={{ fill: '#64748B', fontSize: 8 }} tickLine={false} axisLine={false} tickFormatter={v => `${v}'`}/>
+                    <YAxis hide domain={[0, 1]}/>
+                    <Tooltip contentStyle={{ background: 'rgba(10,18,40,0.97)', border: '1px solid #1C2D40', borderRadius: 8, fontSize: 10 }}
+                      formatter={(v: number, name: string) => [pct(v), name]}/>
+                    <Area type="monotone" dataKey="crowd_pressure"       stroke="#0ea5e9" strokeWidth={1.5} fill="url(#crowdGrad)" dot={false} name="Crowd Pressure" isAnimationActive={false}/>
+                    <Area type="monotone" dataKey="psychological_stress" stroke="#a855f7" strokeWidth={1.5} fill="url(#psychGrad)" dot={false} name="Psych Stress" isAnimationActive={false}/>
+                    <Area type="monotone" dataKey="physical_fatigue"     stroke="#f59e0b" strokeWidth={1}   fill="none" strokeDasharray="3 2" dot={false} name="Fatigue" isAnimationActive={false}/>
+                  </AreaChart>
+                </ResponsiveContainer>
+                <div className="flex gap-4 mt-1">
+                  {[['#0ea5e9','Crowd Pressure'],['#a855f7','Psych Stress'],['#f59e0b','Fatigue']].map(([c,l]) => (
+                    <span key={l} className="flex items-center gap-1 text-[9px] text-collapse-dim">
+                      <span className="w-3 h-0.5 rounded inline-block" style={{ background: c }}/>
+                      {l}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              {/* Event feed */}
+              <div className="flex-1 overflow-y-auto custom-scrollbar px-6 pb-4">
+                <p className="text-[10px] font-bold text-collapse-muted uppercase tracking-wider mb-3 sticky top-0 bg-collapse-bg py-1">Event Feed</p>
+                <div className="space-y-2">
+                  <AnimatePresence initial={false}>
+                    {visibleEvents.map((ev, i) => (
+                      <motion.div key={`${ev.minute}-${ev.type}-${i}`}
+                        initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0 }}
+                        transition={{ duration: 0.2 }}
+                        className={`flex gap-3 rounded-xl px-3 py-2.5 border ${
+                          ev.type === 'goal'          ? 'bg-emerald-500/5 border-emerald-500/20' :
+                          ev.type === 'momentum_shift'? 'bg-amber-500/5 border-amber-500/20' :
+                          ev.type === 'card'          ? 'bg-yellow-500/5 border-yellow-500/20' :
+                          'bg-collapse-surface border-collapse-border'
+                        }`}>
+                        <span className="text-sm leading-none mt-0.5 shrink-0">{eventIcon(ev.type)}</span>
+                        <div className="min-w-0">
+                          <p className="text-[10px] font-bold text-collapse-muted">{ev.minute}'
+                            {ev.type === 'goal' && ev.team && <span className="ml-1 text-emerald-400">{ev.team}{ev.score_a !== undefined ? ` — ${ev.score_a}–${ev.score_b}` : ''}</span>}
+                            {ev.type === 'substitution' && ev.team && <span className="ml-1 text-collapse-accent">{ev.team}</span>}
+                          </p>
+                          <p className="text-xs text-collapse-text mt-0.5 leading-snug">
+                            {ev.type === 'goal' && ev.player && <span className="font-semibold">{ev.player} · </span>}
+                            {ev.type === 'substitution' && ev.player_off && <span>↓ {ev.player_off} · ↑ {ev.player_on} · </span>}
+                            {ev.description}
+                          </p>
+                        </div>
+                      </motion.div>
+                    ))}
+                  </AnimatePresence>
+                  {!started && (
+                    <div className="text-center py-8 text-collapse-dim text-xs">
+                      Press Start to begin the simulation
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Right — psychological dashboard */}
+            <div className="overflow-y-auto custom-scrollbar p-6 space-y-6">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wider text-collapse-muted mb-4">Psychological Dashboard</p>
+
+                {currentData ? (
+                  <div className="space-y-5">
+                    <PsychBar label="Crowd Pressure"       value={currentData.crowd_pressure}
+                      icon={Users}  color="#0ea5e9"
+                      description="Crowd noise, venue atmosphere & score-state sentiment"/>
+                    <PsychBar label="Momentum"             value={currentData.momentum}
+                      icon={Zap}    color="#22c55e"
+                      description="Territory control + recent shot volume + goal recency"/>
+                    <PsychBar label="Psychological Stress" value={currentData.psychological_stress}
+                      icon={Brain}  color="#a855f7"
+                      description="Score deficit × time pressure × tempo variance"/>
+                    <PsychBar label="Physical Fatigue"     value={currentData.physical_fatigue}
+                      icon={Flame}  color="#f59e0b"
+                      description="Cumulative exertion · dips on substitutions"/>
+                    <PsychBar label="Rivalry Intensity"    value={currentData.rivalry_index}
+                      icon={Heart}  color="#ef4444"
+                      description="Historical head-to-head psychological weight"/>
+                  </div>
+                ) : (
+                  <div className="space-y-5">
+                    {['Crowd Pressure','Momentum','Psychological Stress','Physical Fatigue','Rivalry Intensity'].map(l => (
+                      <div key={l} className="space-y-1.5">
+                        <div className="h-3 bg-collapse-border rounded w-32 animate-pulse"/>
+                        <div className="h-2 bg-collapse-border/50 rounded-full animate-pulse"/>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Turnover + territory indicators */}
+              {currentData && (
+                <div className="space-y-3 border-t border-collapse-border pt-4">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-collapse-muted">Tactical Signals</p>
+                  {[
+                    { label: 'Turnover Burstiness', val: currentData.turnover_burstiness, color: currentData.turnover_burstiness > 0.4 ? '#ef4444' : '#22c55e' },
+                    { label: 'Territory Tilt',      val: currentData.territory_tilt,      color: currentData.territory_tilt > 0.55 ? '#ef4444' : '#22c55e' },
+                  ].map(({ label, val, color }) => (
+                    <div key={label} className="flex items-center justify-between">
+                      <span className="text-xs text-collapse-muted">{label}</span>
+                      <div className="flex items-center gap-2">
+                        <div className="w-24 h-1.5 rounded-full bg-collapse-border overflow-hidden">
+                          <div className="h-full rounded-full transition-all duration-500" style={{ width: `${Math.min(100, val * 100)}%`, background: color }}/>
+                        </div>
+                        <span className="text-[10px] font-mono font-bold w-8 text-right" style={{ color }}>{pct(val)}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Final score preview */}
+              {isFulltime && (
+                <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+                  className="border-t border-collapse-border pt-4 space-y-2">
+                  <div className="flex items-center gap-2 mb-3">
+                    <Trophy className="w-4 h-4 text-amber-400"/>
+                    <p className="text-xs font-bold text-collapse-text">Full Time</p>
+                  </div>
+                  <div className="bg-collapse-surface border border-collapse-border rounded-2xl p-4 text-center">
+                    <p className="text-3xl font-black font-mono text-collapse-text">
+                      {sim.final_score.team_a} – {sim.final_score.team_b}
+                    </p>
+                    <p className="text-xs text-collapse-muted mt-1">
+                      {sim.team_a} vs {sim.team_b}
+                    </p>
+                    <p className="text-[10px] text-collapse-dim mt-2">
+                      {sim.final_score.team_a === sim.final_score.team_b
+                        ? 'Draw'
+                        : sim.final_score.team_a > sim.final_score.team_b
+                          ? `${sim.team_a} win`
+                          : `${sim.team_b} win`}
+                    </p>
+                  </div>
+                </motion.div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

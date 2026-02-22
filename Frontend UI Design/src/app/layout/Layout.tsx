@@ -9,6 +9,7 @@ import {
   Swords,
   BrainCircuit,
   Users,
+  Radio,
 } from "lucide-react";
 import { useState } from "react";
 import { clsx } from "clsx";
@@ -62,6 +63,7 @@ export function Layout({ theme, onToggleTheme, backendConnected }: LayoutProps) 
           <NavItem to="/coach-view" icon={<BrainCircuit size={20} />} label="Coach View" isOpen={isSidebarOpen} />
           <NavItem to="/player-portal" icon={<Users size={20} />} label="Player Portal" isOpen={isSidebarOpen} />
           <NavItem to="/wc-2026" icon={<Globe size={20} />} label="WC 2026" isOpen={isSidebarOpen} />
+          <NavItem to="/live-sim" icon={<Radio size={20} />} label="Live Sim" isOpen={isSidebarOpen} />
         </nav>
 
         {/* Theme + backend status */}
