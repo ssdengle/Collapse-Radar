@@ -2100,6 +2100,26 @@ def wc2026_live_sim(team_a: str = "France", team_b: str = "Brazil"):
     }
     rivalry = RIVALRIES.get(frozenset([team_a, team_b]), 0.50)
 
+    # Real-world ELO anchor (same table used by tournament sim)
+    _LIVE_ELO: dict[str, float] = {
+        "Argentina":   0.92, "France":      0.91, "Brazil":       0.90,
+        "England":     0.87, "Spain":       0.87, "Portugal":     0.86,
+        "Germany":     0.85, "Netherlands": 0.84,
+        "Belgium":     0.80, "Croatia":     0.79, "Denmark":      0.78,
+        "Uruguay":     0.77, "Switzerland": 0.76, "USA":          0.72,
+        "Mexico":      0.71, "Morocco":     0.73, "Japan":        0.72,
+        "South Korea": 0.70, "Senegal":     0.70, "Serbia":       0.68,
+        "Ecuador":     0.66, "Poland":      0.66, "Wales":        0.65,
+        "Australia":   0.63, "Canada":      0.62, "Ghana":        0.60,
+        "Cameroon":    0.59, "Tunisia":     0.58, "Saudi Arabia": 0.56,
+        "Iran":        0.55, "Qatar":       0.52, "Costa Rica":   0.51,
+    }
+    elo_a = _LIVE_ELO.get(team_a, 0.62)
+    elo_b = _LIVE_ELO.get(team_b, 0.62)
+    # Relative attacking strength (biases goal probabilities toward better team)
+    elo_ratio_a = elo_a / max(0.1, elo_a + elo_b)  # fraction of combined quality
+    elo_ratio_b = 1.0 - elo_ratio_a
+
     # Alias map: WC2026 display names → _SQUADS keys
     _SIM_ALIASES = {
         "USA": "USA", "United States": "USA",
@@ -2118,7 +2138,12 @@ def wc2026_live_sim(team_a: str = "France", team_b: str = "Brazil"):
     squad_a = _squad(team_a)
     squad_b = _squad(team_b)
 
-    base_risk_a = fp_a.get("burstiness", 0.3)*0.35 + fp_a.get("turnover_pm", 0.2)*0.35 + 0.15
+    # Base collapse risk: lower ELO teams start with higher risk
+    base_risk_a = float(np.clip(
+        fp_a.get("burstiness", 0.3)*0.25 + fp_a.get("turnover_pm", 0.2)*0.25
+        + 0.10 + (1.0 - elo_a) * 0.30,  # weaker teams collapse more
+        0.08, 0.65,
+    ))
     sub_mins = sorted(rng.choice(range(50, 85), size=3, replace=False).tolist())
 
     minutes_data = []
@@ -2175,9 +2200,10 @@ def wc2026_live_sim(team_a: str = "France", team_b: str = "Brazil"):
             "territory_tilt":       round(fp_a.get("territory_tilt", 0.5) + float(rng.uniform(-0.04, 0.04)), 3),
         })
 
-        # ── Goal generation ───────────────────────────────────────────────
-        gp_b = prob * 0.038
-        gp_a = (1 - prob) * 0.028
+        # ── Goal generation (ELO-weighted so better teams score more) ────
+        # team_a collapses → team_b scores; also stronger team scores more
+        gp_b = prob * 0.036 * (0.6 + elo_ratio_b * 0.8)
+        gp_a = (1 - prob) * 0.026 * (0.6 + elo_ratio_a * 0.8)
         if minute > 10 and rng.random() < gp_b:
             score_b += 1
             events.append({"minute": minute, "type": "goal", "team": team_b,
@@ -2284,16 +2310,39 @@ def wc2026_simulate_tournament():
         frozenset(["Brazil","Germany"]):0.88,
     }
 
+    # ── Real-world FIFA/ELO anchor ratings (2024-25) ─────────────────────
+    # Tier 1 — global elite
+    # Tier 2 — strong contenders
+    # Tier 3 — competitive nations
+    # Tier 4 — outsiders
+    _ELO: dict[str, float] = {
+        "Argentina":   0.92, "France":      0.91, "Brazil":       0.90,
+        "England":     0.87, "Spain":       0.87, "Portugal":     0.86,
+        "Germany":     0.85, "Netherlands": 0.84,
+        "Belgium":     0.80, "Croatia":     0.79, "Denmark":      0.78,
+        "Uruguay":     0.77, "Switzerland": 0.76, "USA":          0.72,
+        "Mexico":      0.71, "Morocco":     0.73, "Japan":        0.72,
+        "South Korea": 0.70, "Senegal":     0.70, "Serbia":       0.68,
+        "Ecuador":     0.66, "Poland":      0.66, "Wales":        0.65,
+        "Australia":   0.63, "Canada":      0.62, "Ghana":        0.60,
+        "Cameroon":    0.59, "Tunisia":     0.58, "Saudi Arabia": 0.56,
+        "Iran":        0.55, "Qatar":       0.52, "Costa Rica":   0.51,
+    }
+
     def _strength(team: str, fp: dict) -> float:
-        """0→1 composite strength for a team."""
-        return float(np.clip(
-            0.50
-            + (1.0 - fp.get("burstiness", 0.3)) * 0.20
-            + (1.0 - fp.get("turnover_pm", 0.2)) * 0.15
-            + fp.get("territory_tilt", 0.5) * 0.15
-            + fp.get("def_actions_pm", 0.4) * 0.10,
-            0.25, 0.85,
-        ))
+        """
+        Composite strength: 70% real-world ELO anchor + 30% fingerprint modifier.
+        This ensures elite nations (Brazil/France/Argentina) consistently perform
+        better than lower-ranked teams regardless of synthetic fingerprint noise.
+        """
+        elo = _ELO.get(team, 0.62)
+        # Fingerprint modifier: low turnover + high territory = positive signal
+        fp_mod = (
+            (1.0 - fp.get("burstiness",    0.3)) * 0.12
+            + (1.0 - fp.get("turnover_pm", 0.2)) * 0.10
+            + fp.get("territory_tilt",     0.5)  * 0.08
+        ) - 0.15   # centre around 0 so it's a modifier not a base
+        return float(np.clip(elo * 0.70 + (elo + fp_mod) * 0.30, 0.30, 0.93))
 
     def _sim_match(ta: str, tb: str, rng_seed: int, is_knockout: bool = False):
         """Simulate a single match. Returns (score_a, score_b, collapse_risk)."""
