@@ -1,4 +1,5 @@
 # backend/main.py
+from typing import Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -2138,10 +2139,12 @@ def wc2026_live_sim(team_a: str = "France", team_b: str = "Brazil"):
     squad_a = _squad(team_a)
     squad_b = _squad(team_b)
 
-    # Base collapse risk: lower ELO teams start with higher risk
+    # Base collapse risk: full fingerprint (burstiness, turnover, tempo variance, pass slope) + ELO
     base_risk_a = float(np.clip(
-        fp_a.get("burstiness", 0.3)*0.25 + fp_a.get("turnover_pm", 0.2)*0.25
-        + 0.10 + (1.0 - elo_a) * 0.30,  # weaker teams collapse more
+        fp_a.get("burstiness", 0.3) * 0.22 + fp_a.get("turnover_pm", 0.2) * 0.22
+        + fp_a.get("tempo_variance", 0.25) * 0.12
+        - max(0, fp_a.get("pass_acc_slope", 0)) * 0.06
+        + 0.08 + (1.0 - elo_a) * 0.28,
         0.08, 0.65,
     ))
     sub_mins = sorted(rng.choice(range(50, 85), size=3, replace=False).tolist())
@@ -2164,6 +2167,7 @@ def wc2026_live_sim(team_a: str = "France", team_b: str = "Brazil"):
         psych = min(0.95, max(0.05,
             0.18 + max(0, deficit) * 0.28 * time_pressure
             + fp_a.get("tempo_variance", 0.3) * 0.18
+            - max(0, fp_a.get("pass_acc_slope", 0)) * 0.05
             + rivalry * 0.08
             + (0.14 if minute > 80 else 0.0)
         ))
@@ -2267,14 +2271,16 @@ def wc2026_live_sim(team_a: str = "France", team_b: str = "Brazil"):
 
 # ── WC 2026 Tournament Simulation ─────────────────────────────────────────
 @app.get("/api/wc2026/simulate-tournament")
-def wc2026_simulate_tournament():
+def wc2026_simulate_tournament(run_seed: Optional[int] = None):
     """
     Simulate the full WC 2026 tournament:
       - 8 groups of 4 teams (group stage)
       - Round of 16, Quarter-finals, Semi-finals, Third-place, Final
-    Uses team fingerprints as prior strength; deterministic via team-name seeds.
+    Uses team fingerprints + ELO; pass ?run_seed=<int> for reproducibility, omit for a new random run each time.
     """
-    import hashlib, numpy as np
+    import hashlib, numpy as np, time
+    if run_seed is None:
+        run_seed = int(time.time() * 1000)
 
     # ── Seeded groups (balanced geographically like real WC draw) ────────
     GROUPS: dict[str, list[str]] = {
@@ -2331,18 +2337,27 @@ def wc2026_simulate_tournament():
 
     def _strength(team: str, fp: dict) -> float:
         """
-        Composite strength: 70% real-world ELO anchor + 30% fingerprint modifier.
-        This ensures elite nations (Brazil/France/Argentina) consistently perform
-        better than lower-ranked teams regardless of synthetic fingerprint noise.
+        Composite strength: ELO anchor + full fingerprint (all 8 features).
+        Uses turnover, burstiness, territory, pass accuracy slope, tempo variance,
+        defensive actions, final-third entries, shots conceded for realism.
         """
         elo = _ELO.get(team, 0.62)
-        # Fingerprint modifier: low turnover + high territory = positive signal
+        # Full fingerprint modifier (normalized so centre ~0)
+        pass_slope = fp.get("pass_acc_slope", 0.0)   # higher = more stable under pressure
+        def_act = fp.get("def_actions_pm", 0.15)     # defensive solidity
+        ft_entries = fp.get("ft_entries_pm", 0.12)  # attacking threat
+        shots_conc = fp.get("shots_conc_pm", 0.10)  # lower = better defence
         fp_mod = (
-            (1.0 - fp.get("burstiness",    0.3)) * 0.12
-            + (1.0 - fp.get("turnover_pm", 0.2)) * 0.10
-            + fp.get("territory_tilt",     0.5)  * 0.08
-        ) - 0.15   # centre around 0 so it's a modifier not a base
-        return float(np.clip(elo * 0.70 + (elo + fp_mod) * 0.30, 0.30, 0.93))
+            (1.0 - fp.get("burstiness", 0.3)) * 0.10
+            + (1.0 - fp.get("turnover_pm", 0.2)) * 0.08
+            + (fp.get("territory_tilt", 0.5) - 0.5) * 0.12
+            + max(0, pass_slope) * 0.08
+            + (1.0 - fp.get("tempo_variance", 0.25)) * 0.06
+            + min(def_act * 0.3, 0.04)
+            + min(ft_entries * 0.4, 0.04)
+            - min(shots_conc * 0.5, 0.04)
+        ) - 0.12
+        return float(np.clip(elo * 0.65 + (elo + fp_mod) * 0.35, 0.30, 0.93))
 
     def _sim_match(ta: str, tb: str, rng_seed: int, is_knockout: bool = False):
         """Simulate a single match. Returns (score_a, score_b, collapse_risk)."""
@@ -2380,9 +2395,13 @@ def wc2026_simulate_tournament():
         else:
             winner = tb
 
+        # Collapse risk from full fingerprint: burstiness, turnover, tempo variance, pass slope, rivalry
+        pass_slope_a = fp_a.get("pass_acc_slope", 0.0)
         collapse_risk = round(float(np.clip(
-            fp_a.get("burstiness", 0.3) * 0.35 + fp_a.get("turnover_pm", 0.2) * 0.35 + 0.15
-            + (rivalry * 0.10) + float(rng.uniform(-0.05, 0.05)), 0.05, 0.92,
+            fp_a.get("burstiness", 0.3) * 0.28 + fp_a.get("turnover_pm", 0.2) * 0.28
+            + fp_a.get("tempo_variance", 0.25) * 0.18
+            - max(0, pass_slope_a) * 0.08
+            + (rivalry * 0.10) + 0.12 + float(rng.uniform(-0.04, 0.04)), 0.05, 0.92,
         )), 3)
 
         return {
@@ -2392,7 +2411,7 @@ def wc2026_simulate_tournament():
         }
 
     def _match_seed(ta: str, tb: str, stage: str) -> int:
-        return int(hashlib.md5(f"{ta}-{tb}-{stage}".encode()).hexdigest()[:8], 16)
+        return int(hashlib.md5(f"{ta}-{tb}-{stage}-{run_seed}".encode()).hexdigest()[:8], 16)
 
     # ── Group stage ───────────────────────────────────────────────────────
     group_results: dict[str, dict] = {}

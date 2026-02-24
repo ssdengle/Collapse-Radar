@@ -5,7 +5,7 @@ import {
   ReferenceLine, CartesianGrid,
 } from 'recharts';
 import { motion, AnimatePresence } from 'motion/react';
-import { Play, Pause, RotateCcw, Zap, Users, Brain, Flame, Heart, Trophy, ChevronDown, Globe, Medal, AlertTriangle, ChevronRight, Radio } from 'lucide-react';
+import { Play, Pause, RotateCcw, Zap, Users, Brain, Flame, Heart, Trophy, ChevronDown, Globe, Medal, AlertTriangle, ChevronRight, Radio, ChevronLeft, X } from 'lucide-react';
 import { API_BASE } from '../../lib/api';
 
 const get = (url: string) => fetch(`${API_BASE}${url}`).then(r => r.json());
@@ -57,6 +57,14 @@ function riskColor(v: number) {
 }
 
 function pct(v: number) { return `${Math.round(v * 100)}%`; }
+
+// Derive winner from score so UI always matches result (model prediction correctness)
+function getMatchWinner(m: TournamentMatch): string | null {
+  const [home, away] = m.score.split('–').map(Number);
+  if (home > away) return m.home;
+  if (away > home) return m.away;
+  return m.winner ?? null; // draw: use backend winner (e.g. penalties) or null
+}
 
 function eventIcon(type: SimEvent['type']) {
   switch (type) {
@@ -151,12 +159,42 @@ interface TournamentData {
   team_stats: Record<string, { group: string; pts: number; gf: number; ga: number; gd: number; collapse_risk: number }>;
 }
 
+// All matches a team played (group + knockout) for team detail view
+function getTeamMatches(tourn: TournamentData, team: string): { stage: string; match: TournamentMatch }[] {
+  const out: { stage: string; match: TournamentMatch }[] = [];
+  const push = (stage: string, m: TournamentMatch) => {
+    if (m.home === team || m.away === team) out.push({ stage, match: m });
+  };
+  for (const g of 'ABCDEFGH') {
+    for (const m of tourn.groups[g].matches) push(`Group ${g}`, m);
+  }
+  tourn.knockout.r16.forEach(m => push('Round of 16', m));
+  tourn.knockout.qf.forEach(m => push('Quarter-final', m));
+  tourn.knockout.sf.forEach(m => push('Semi-final', m));
+  tourn.knockout.third_place.forEach(m => push('3rd place', m));
+  tourn.knockout.final.forEach(m => push('Final', m));
+  return out;
+}
+
 // ── Tournament components ──────────────────────────────────────────────────
-function MatchRow({ m, showRisk = true }: { m: TournamentMatch; showRisk?: boolean }) {
+function MatchRow({
+  m,
+  showRisk = true,
+  onClick,
+}: {
+  m: TournamentMatch;
+  showRisk?: boolean;
+  onClick?: () => void;
+}) {
   const [home, away] = m.score.split('–').map(Number);
-  const homeWon = m.winner === m.home;
+  const winner = getMatchWinner(m);
+  const homeWon = winner === m.home;
   return (
-    <div className="flex items-center justify-between gap-2 bg-collapse-bg rounded-lg px-3 py-2 text-xs">
+    <div
+      role={onClick ? 'button' : undefined}
+      onClick={onClick}
+      className={`flex items-center justify-between gap-2 bg-collapse-bg rounded-lg px-3 py-2 text-xs ${onClick ? 'cursor-pointer hover:ring-2 hover:ring-collapse-accent/50 transition-all' : ''}`}
+    >
       <span className={`font-semibold truncate w-24 text-right ${homeWon ? 'text-collapse-text' : 'text-collapse-muted'}`}>{m.home}</span>
       <div className="flex items-center gap-1.5 shrink-0">
         <span className={`font-black font-mono text-sm ${homeWon ? 'text-collapse-accent' : 'text-collapse-muted'}`}>{home}</span>
@@ -227,26 +265,435 @@ function GroupTable({ name, standings, matches }: { name: string; standings: Gro
   );
 }
 
-function KnockoutStage({ label, matches }: { label: string; matches: TournamentMatch[] }) {
+function KnockoutStage({
+  label,
+  matches,
+  visible,
+  onMatchClick,
+}: {
+  label: string;
+  matches: TournamentMatch[];
+  visible?: boolean;
+  onMatchClick?: (m: TournamentMatch, stage: string) => void;
+}) {
+  if (visible === false) return null;
   return (
-    <div className="space-y-1.5">
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.35 }}
+      className="space-y-1.5"
+    >
       <p className="text-[9px] font-black text-collapse-muted uppercase tracking-widest">{label}</p>
       <div className="space-y-1">
-        {matches.map((m, i) => <MatchRow key={i} m={m}/>)}
+        {matches.map((m, i) => (
+          <motion.div key={i} initial={{ opacity: 0, x: -6 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.06 }}>
+            <MatchRow m={m} onClick={onMatchClick ? () => onMatchClick(m, label) : undefined}/>
+          </motion.div>
+        ))}
       </div>
+    </motion.div>
+  );
+}
+
+// ── Modals: Match detail (detailed stats, winner from score) & Team performance ─
+function MatchDetailModal({
+  match,
+  stage,
+  onClose,
+}: {
+  match: TournamentMatch;
+  stage: string;
+  onClose: () => void;
+}) {
+  const [homeGoals, awayGoals] = match.score.split('–').map(Number);
+  const winner = getMatchWinner(match);
+  const risk = match.collapse_risk;
+  const riskLabel = risk < 0.35 ? 'Low' : risk < 0.55 ? 'Medium' : 'High';
+  const isDraw = homeGoals === awayGoals;
+  const resultType = isDraw
+    ? (match.penalties ? 'Draw (decided on penalties)' : 'Draw')
+    : 'Full-time result';
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.2 }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60"
+      onClick={onClose}
+    >
+      <motion.div
+        initial={{ scale: 0.95, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        exit={{ scale: 0.95, opacity: 0 }}
+        transition={{ duration: 0.2 }}
+        onClick={e => e.stopPropagation()}
+        className="bg-collapse-surface border border-collapse-border rounded-2xl shadow-xl max-w-md w-full overflow-hidden max-h-[90vh] flex flex-col"
+      >
+        <div className="flex items-center justify-between px-4 py-3 border-b border-collapse-border shrink-0">
+          <span className="text-[10px] font-bold text-collapse-muted uppercase tracking-wider">{stage}</span>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-collapse-bg text-collapse-muted"><X className="w-4 h-4"/></button>
+        </div>
+        <div className="p-4 space-y-4 overflow-y-auto">
+          {/* Score line — winner derived from score (model correctness) */}
+          <div className="flex items-center justify-between gap-4">
+            <span className={`font-bold text-lg truncate ${winner === match.home ? 'text-collapse-accent' : 'text-collapse-muted'}`}>{match.home}</span>
+            <div className="flex items-center gap-2 shrink-0">
+              <span className="font-black text-xl font-mono">{homeGoals}</span>
+              <span className="text-collapse-dim">–</span>
+              <span className="font-black text-xl font-mono">{awayGoals}</span>
+              {match.penalties != null && (
+                <span className="text-[10px] text-collapse-dim">(pens {match.penalties.a}–{match.penalties.b})</span>
+              )}
+            </div>
+            <span className={`font-bold text-lg truncate text-right ${winner === match.away ? 'text-collapse-accent' : 'text-collapse-muted'}`}>{match.away}</span>
+          </div>
+
+          {/* Winner = result (model prediction correct) */}
+          {winner && (
+            <div className="rounded-xl bg-collapse-accent/10 border border-collapse-accent/25 px-3 py-2">
+              <p className="text-[10px] font-bold text-collapse-muted uppercase tracking-wider">Result · Model prediction</p>
+              <p className="text-sm font-bold text-collapse-accent">Winner: {winner}</p>
+              <p className="text-[10px] text-collapse-dim mt-0.5">{resultType}. Winner is derived from the simulated score.</p>
+            </div>
+          )}
+          {isDraw && !match.penalties && (
+            <div className="rounded-xl bg-collapse-bg border border-collapse-border px-3 py-2">
+              <p className="text-[10px] font-bold text-collapse-muted uppercase tracking-wider">Result</p>
+              <p className="text-sm font-semibold text-collapse-text">Draw {homeGoals}–{awayGoals}</p>
+            </div>
+          )}
+
+          {/* Detailed match stats */}
+          <div className="space-y-3">
+            <p className="text-[10px] font-bold text-collapse-muted uppercase tracking-wider">Match stats</p>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="bg-collapse-bg rounded-lg px-3 py-2 border border-collapse-border">
+                <p className="text-[9px] text-collapse-dim uppercase">Goals (home)</p>
+                <p className="text-lg font-black font-mono text-collapse-text">{homeGoals}</p>
+              </div>
+              <div className="bg-collapse-bg rounded-lg px-3 py-2 border border-collapse-border">
+                <p className="text-[9px] text-collapse-dim uppercase">Goals (away)</p>
+                <p className="text-lg font-black font-mono text-collapse-text">{awayGoals}</p>
+              </div>
+            </div>
+            <div className="bg-collapse-bg rounded-lg px-3 py-2 border border-collapse-border">
+              <p className="text-[9px] text-collapse-dim uppercase">Result type</p>
+              <p className="text-sm font-semibold text-collapse-text">{resultType}</p>
+            </div>
+          </div>
+
+          {/* Collapse risk */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-collapse-muted font-semibold">Collapse risk (simulated)</span>
+              <span className="font-mono font-bold" style={{ color: riskColor(risk) }}>{pct(risk)} · {riskLabel}</span>
+            </div>
+            <div className="h-3 rounded-full bg-collapse-bg overflow-hidden">
+              <motion.div
+                className="h-full rounded-full"
+                style={{ background: riskColor(risk) }}
+                initial={{ width: 0 }}
+                animate={{ width: `${risk * 100}%` }}
+                transition={{ duration: 0.4 }}
+              />
+            </div>
+          </div>
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+function TeamDetailModal({
+  team,
+  tourn,
+  onClose,
+  onMatchClick,
+}: {
+  team: string;
+  tourn: TournamentData;
+  onClose: () => void;
+  onMatchClick: (m: TournamentMatch, stage: string) => void;
+}) {
+  const stats = tourn.team_stats[team];
+  const round = tourn.rounds_reached[team] ?? 'Group stage';
+  const matches = getTeamMatches(tourn, team);
+  const isChamp = round.includes('Champion');
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.2 }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60"
+      onClick={onClose}
+    >
+      <motion.div
+        initial={{ scale: 0.95, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        exit={{ scale: 0.95, opacity: 0 }}
+        transition={{ duration: 0.2 }}
+        onClick={e => e.stopPropagation()}
+        className="bg-collapse-surface border border-collapse-border rounded-2xl shadow-xl max-w-lg w-full max-h-[85vh] overflow-hidden flex flex-col"
+      >
+        <div className="flex items-center justify-between px-4 py-3 border-b border-collapse-border shrink-0">
+          <h3 className="font-bold text-collapse-text truncate">{team}</h3>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-collapse-bg text-collapse-muted"><X className="w-4 h-4"/></button>
+        </div>
+        <div className="p-4 overflow-y-auto space-y-4">
+          <div className={`rounded-xl border px-4 py-3 ${isChamp ? 'bg-amber-500/10 border-amber-500/25' : 'bg-collapse-bg border-collapse-border'}`}>
+            <p className="text-[10px] font-bold text-collapse-muted uppercase tracking-wider">How far they got</p>
+            <p className={`font-black text-lg ${isChamp ? 'text-amber-400' : 'text-collapse-text'}`}>{round}</p>
+          </div>
+          {stats && (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              <div className="bg-collapse-bg rounded-lg px-3 py-2 border border-collapse-border">
+                <p className="text-[9px] text-collapse-dim uppercase">Group</p>
+                <p className="font-bold text-collapse-text">{stats.group}</p>
+              </div>
+              <div className="bg-collapse-bg rounded-lg px-3 py-2 border border-collapse-border">
+                <p className="text-[9px] text-collapse-dim uppercase">Goals</p>
+                <p className="font-bold text-collapse-text">{stats.gf}</p>
+              </div>
+              <div className="bg-collapse-bg rounded-lg px-3 py-2 border border-collapse-border">
+                <p className="text-[9px] text-collapse-dim uppercase">Conceded</p>
+                <p className="font-bold text-collapse-text">{stats.ga}</p>
+              </div>
+              <div className="bg-collapse-bg rounded-lg px-3 py-2 border border-collapse-border">
+                <p className="text-[9px] text-collapse-dim uppercase">Pts</p>
+                <p className="font-bold text-collapse-accent">{stats.pts}</p>
+              </div>
+            </div>
+          )}
+          <div className="space-y-2">
+            <p className="text-[10px] font-bold text-collapse-muted uppercase tracking-wider">All matches · Click for details</p>
+            <div className="space-y-1">
+              {matches.map(({ stage, match }, i) => (
+                <div
+                  key={i}
+                  onClick={() => onMatchClick(match, stage)}
+                  className="flex items-center gap-2 rounded-lg bg-collapse-bg border border-collapse-border px-3 py-2 cursor-pointer hover:ring-2 hover:ring-collapse-accent/50 transition-all"
+                >
+                  <span className="text-[9px] text-collapse-dim shrink-0 w-20">{stage}</span>
+                  <span className="flex-1 truncate text-xs font-semibold">{match.home} {match.score} {match.away}</span>
+                  <span
+                    className="text-[9px] font-mono px-1.5 py-0.5 rounded shrink-0"
+                    style={{ color: riskColor(match.collapse_risk), background: `${riskColor(match.collapse_risk)}20` }}
+                  >
+                    {pct(match.collapse_risk)} risk
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+// ── Visual knockout bracket (tree: R16 → QF → SF → Final) ───────────────────
+function BracketTree({
+  knockout,
+  visibleFrom,
+  onMatchClick,
+}: {
+  knockout: TournamentData['knockout'];
+  visibleFrom: 'groups' | 'r16' | 'qf' | 'sf' | 'final';
+  onMatchClick: (m: TournamentMatch, stage: string) => void;
+}) {
+  const show = (stage: string) =>
+    (stage === 'R16' && visibleFrom !== 'groups') ||
+    (stage === 'QF' && ['qf', 'sf', 'final'].includes(visibleFrom)) ||
+    (stage === 'SF' && ['sf', 'final'].includes(visibleFrom)) ||
+    (stage === 'Final' && visibleFrom === 'final');
+  const rounds = [
+    { label: 'Round of 16', key: 'r16', data: knockout.r16 },
+    { label: 'Quarter-finals', key: 'qf', data: knockout.qf },
+    { label: 'Semi-finals', key: 'sf', data: knockout.sf },
+    { label: 'Final', key: 'final', data: knockout.final },
+  ] as const;
+  return (
+    <div className="flex gap-4 overflow-x-auto pb-2">
+      {rounds.map((r, roundIdx) => {
+        if (!show(r.label)) return null;
+        return (
+          <motion.div
+            key={r.key}
+            initial={{ opacity: 0, x: 12 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ delay: roundIdx * 0.08 }}
+            className="flex flex-col justify-around shrink-0"
+            style={{ minWidth: roundIdx === 0 ? 160 : 150 }}
+          >
+            <p className="text-[9px] font-black text-collapse-muted uppercase tracking-widest mb-2">{r.label}</p>
+            <div className="space-y-2 flex-1 flex flex-col justify-center">
+              {r.data.map((m, i) => (
+                <div
+                  key={i}
+                  onClick={() => onMatchClick(m, r.label)}
+                  className="rounded-lg border border-collapse-border bg-collapse-bg p-2 cursor-pointer hover:border-collapse-accent/50 hover:ring-1 hover:ring-collapse-accent/30 transition-all"
+                >
+                  <div className="flex items-center justify-between gap-1 text-[10px]">
+                    <span className={`truncate font-semibold ${m.winner === m.home ? 'text-collapse-accent' : 'text-collapse-muted'}`}>{m.home}</span>
+                    <span className="font-mono font-bold shrink-0">{m.score}</span>
+                    <span className={`truncate font-semibold text-right ${m.winner === m.away ? 'text-collapse-accent' : 'text-collapse-muted'}`}>{m.away}</span>
+                  </div>
+                  <div
+                    className="mt-1 h-1 rounded-full overflow-hidden"
+                    style={{ background: `${riskColor(m.collapse_risk)}30` }}
+                    title={`Collapse risk ${pct(m.collapse_risk)}`}
+                  >
+                    <div className="h-full rounded-full" style={{ width: `${m.collapse_risk * 100}%`, background: riskColor(m.collapse_risk) }}/>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </motion.div>
+        );
+      })}
+      {show('Final') && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="shrink-0 flex flex-col justify-center"
+        >
+          <p className="text-[9px] font-black text-amber-400 uppercase tracking-widest mb-2">3rd place</p>
+          {knockout.third_place.map((m, i) => (
+            <div
+              key={i}
+              onClick={() => onMatchClick(m, '3rd place')}
+              className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-2 cursor-pointer hover:border-amber-500/40 transition-all"
+            >
+              <div className="flex items-center justify-between gap-1 text-[10px]">
+                <span className={`truncate font-semibold ${m.winner === m.home ? 'text-amber-400' : 'text-collapse-muted'}`}>{m.home}</span>
+                <span className="font-mono font-bold shrink-0">{m.score}</span>
+                <span className={`truncate font-semibold text-right ${m.winner === m.away ? 'text-amber-400' : 'text-collapse-muted'}`}>{m.away}</span>
+              </div>
+              <div className="mt-1 h-1 rounded-full overflow-hidden" style={{ background: `${riskColor(m.collapse_risk)}30` }}>
+                <div className="h-full rounded-full" style={{ width: `${m.collapse_risk * 100}%`, background: riskColor(m.collapse_risk) }}/>
+              </div>
+            </div>
+          ))}
+        </motion.div>
+      )}
+    </div>
+  );
+}
+
+// Matchday layout: MD1 = (0,1)&(2,3), MD2 = (0,2)&(1,3), MD3 = (0,3)&(1,2) → indices [0,5], [1,4], [2,3]
+const MATCHDAY_INDICES = [[0, 5], [1, 4], [2, 3]] as const;
+
+function GroupTableWithMatchdays({
+  name,
+  standings,
+  matches,
+  onTeamClick,
+  onMatchClick,
+}: {
+  name: string;
+  standings: GroupStanding[];
+  matches: TournamentMatch[];
+  onTeamClick: (team: string) => void;
+  onMatchClick: (m: TournamentMatch, stage: string) => void;
+}) {
+  const [showMatches, setShowMatches] = useState(true);
+  return (
+    <div className="bg-collapse-surface border border-collapse-border rounded-xl overflow-hidden">
+      <div className="flex items-center justify-between px-3 py-2 border-b border-collapse-border bg-collapse-bg">
+        <span className="text-[10px] font-black text-collapse-accent uppercase tracking-widest">Group {name}</span>
+        <button onClick={() => setShowMatches(s => !s)}
+          className="text-[9px] text-collapse-muted hover:text-collapse-text transition-colors flex items-center gap-0.5">
+          {showMatches ? 'Hide' : 'Matchdays'} <ChevronRight className={`w-3 h-3 transition-transform ${showMatches ? 'rotate-90' : ''}`}/>
+        </button>
+      </div>
+      <table className="w-full text-[10px]">
+        <thead>
+          <tr className="text-collapse-dim border-b border-collapse-border">
+            <th className="text-left px-3 py-1.5 font-semibold">Team</th>
+            <th className="text-center px-1 py-1.5 font-semibold w-6">P</th>
+            <th className="text-center px-1 py-1.5 font-semibold w-6">W</th>
+            <th className="text-center px-1 py-1.5 font-semibold w-6">D</th>
+            <th className="text-center px-1 py-1.5 font-semibold w-6">L</th>
+            <th className="text-center px-1 py-1.5 font-semibold w-8">GD</th>
+            <th className="text-center px-1 py-1.5 font-semibold w-8">Pts</th>
+          </tr>
+        </thead>
+        <tbody>
+          {standings.map((s, i) => (
+            <tr
+              key={s.team}
+              onClick={() => onTeamClick(s.team)}
+              className={`border-b border-collapse-border/40 cursor-pointer hover:bg-collapse-accent/10 transition-colors ${i < 2 ? 'bg-collapse-accent/3' : ''}`}
+            >
+              <td className="px-3 py-1.5 font-semibold text-collapse-text">{s.team}</td>
+              <td className="text-center py-1.5">{s.played}</td>
+              <td className="text-center py-1.5">{s.won}</td>
+              <td className="text-center py-1.5">{s.drawn}</td>
+              <td className="text-center py-1.5">{s.lost}</td>
+              <td className="text-center py-1.5 font-mono">{s.gd >= 0 ? '+' : ''}{s.gd}</td>
+              <td className="text-center py-1.5 font-bold text-collapse-accent">{s.pts}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <AnimatePresence>
+        {showMatches && (
+          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}
+            className="overflow-hidden px-2 pb-2 space-y-4 pt-2">
+            {MATCHDAY_INDICES.map((indices, mdNum) => {
+              const mdMatches = indices.map(i => matches[i]).filter(Boolean);
+              if (!mdMatches.length) return null;
+              return (
+                <motion.div
+                  key={mdNum}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ delay: mdNum * 0.06 }}
+                  className="space-y-1.5"
+                >
+                  <p className="text-[9px] font-black text-collapse-muted uppercase tracking-wider">Matchday {mdNum + 1}</p>
+                  {mdMatches.map((m, i) => (
+                    <motion.div key={i} initial={{ opacity: 0, x: -4 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: mdNum * 0.06 + i * 0.04 }}>
+                      <MatchRow m={m} onClick={() => onMatchClick(m, `Group ${name} · Matchday ${mdNum + 1}`)}/>
+                    </motion.div>
+                  ))}
+                </motion.div>
+              );
+            })}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
 
 function TournamentSim() {
+  const [runId, setRunId] = useState(0);
   const { data: tourn, isLoading, refetch, isFetching } = useQuery<TournamentData>({
-    queryKey: ['tournament-sim'],
-    queryFn: () => get('/api/wc2026/simulate-tournament'),
-    enabled: false,
-    staleTime: Infinity,
+    queryKey: ['tournament-sim', runId],
+    queryFn: () => get(`/api/wc2026/simulate-tournament?run_seed=${Date.now()}`),
+    enabled: runId > 0,
+    staleTime: 0,
   });
 
   const [activeGroup, setActiveGroup] = useState('A');
+  const [revealPhase, setRevealPhase] = useState<'groups' | 'r16' | 'qf' | 'sf' | 'final'>('groups');
+  const [selectedTeam, setSelectedTeam] = useState<string | null>(null);
+  const [selectedMatch, setSelectedMatch] = useState<TournamentMatch | null>(null);
+  const [selectedMatchStage, setSelectedMatchStage] = useState<string>('');
+
+  const runSim = () => { setRunId(r => r + 1); setRevealPhase('groups'); setSelectedTeam(null); setSelectedMatch(null); };
+  const onRerun = () => { setRunId(r => r + 1); setRevealPhase('groups'); setSelectedTeam(null); setSelectedMatch(null); };
+  useEffect(() => { if (tourn) setRevealPhase('groups'); }, [tourn]);
+
+  const handleMatchClick = (m: TournamentMatch, stage: string) => {
+    setSelectedMatch(m);
+    setSelectedMatchStage(stage);
+  };
+  const handleTeamClick = (team: string) => setSelectedTeam(team);
 
   return (
     <div className="flex-1 overflow-y-auto custom-scrollbar">
@@ -268,7 +715,7 @@ function TournamentSim() {
               ))}
             </div>
           </div>
-          <button onClick={() => refetch()} disabled={isLoading || isFetching}
+          <button onClick={runSim} disabled={isLoading || isFetching}
             className="flex items-center gap-2 px-6 py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-bold text-sm transition-all disabled:opacity-60 shadow-lg shadow-amber-500/20">
             {(isLoading || isFetching) ? (
               <><span className="w-4 h-4 border-2 border-black/30 border-t-black rounded-full animate-spin"/>Simulating…</>
@@ -302,7 +749,7 @@ function TournamentSim() {
                   <p className="text-[9px] text-collapse-dim mt-1">3rd place</p>
                   <p className="text-sm font-bold text-collapse-text">{tourn.third_place}</p>
                 </div>
-                <button onClick={() => refetch()} disabled={isFetching}
+                <button onClick={onRerun} disabled={isFetching}
                   className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-collapse-border text-collapse-muted hover:text-collapse-text hover:border-collapse-accent text-xs font-semibold transition-all">
                   <RotateCcw className={`w-3.5 h-3.5 ${isFetching ? 'animate-spin' : ''}`}/>
                   Re-run
@@ -321,8 +768,28 @@ function TournamentSim() {
               {tourn.top_risk_matches.map((m, i) => (
                 <div key={i} className="flex items-center gap-3">
                   <span className="text-[9px] text-collapse-dim w-3 shrink-0">#{i+1}</span>
-                  <MatchRow m={m}/>
+                  <MatchRow m={m} onClick={() => handleMatchClick(m, 'High risk')}/>
                 </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Process stepper: show group stage → knockouts step-by-step */}
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <p className="text-[10px] font-bold text-collapse-muted uppercase tracking-wider">View stage</p>
+            <div className="flex rounded-xl overflow-hidden border border-collapse-border text-[10px] font-bold">
+              {(['groups', 'r16', 'qf', 'sf', 'final'] as const).map(phase => (
+                <button
+                  key={phase}
+                  onClick={() => setRevealPhase(phase)}
+                  className={`flex items-center gap-1 px-2.5 py-2 transition-all capitalize ${revealPhase === phase ? 'bg-amber-500 text-black' : 'bg-collapse-surface text-collapse-muted hover:text-collapse-text'}`}
+                >
+                  {phase === 'groups' && 'Groups'}
+                  {phase === 'r16' && 'R16'}
+                  {phase === 'qf' && 'QF'}
+                  {phase === 'sf' && 'SF'}
+                  {phase === 'final' && 'Final'}
+                </button>
               ))}
             </div>
           </div>
@@ -343,32 +810,48 @@ function TournamentSim() {
               </div>
               <AnimatePresence mode="wait">
                 <motion.div key={activeGroup} initial={{ opacity: 0, x: 6 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -6 }}>
-                  <GroupTable
+                  <GroupTableWithMatchdays
                     name={activeGroup}
                     standings={tourn.groups[activeGroup].standings}
                     matches={tourn.groups[activeGroup].matches}
+                    onTeamClick={handleTeamClick}
+                    onMatchClick={handleMatchClick}
                   />
                 </motion.div>
               </AnimatePresence>
             </div>
 
-            {/* Knockout */}
+            {/* Knockout bracket — reveal by phase */}
             <div className="space-y-4 bg-collapse-surface border border-collapse-border rounded-2xl p-5">
-              <p className="text-xs font-bold text-collapse-muted uppercase tracking-wider mb-1">Knockout Bracket</p>
-              <KnockoutStage label="Round of 16"  matches={tourn.knockout.r16}/>
-              <KnockoutStage label="Quarter-finals" matches={tourn.knockout.qf}/>
-              <KnockoutStage label="Semi-finals"  matches={tourn.knockout.sf}/>
-              <KnockoutStage label="3rd Place"    matches={tourn.knockout.third_place}/>
-              <div className="border border-amber-500/30 bg-amber-500/5 rounded-xl p-2 space-y-1">
-                <p className="text-[9px] font-black text-amber-400 uppercase tracking-widest">Final</p>
-                {tourn.knockout.final.map((m, i) => <MatchRow key={i} m={m}/>)}
+              <div className="flex items-center justify-between mb-1">
+                <p className="text-xs font-bold text-collapse-muted uppercase tracking-wider">Knockout Bracket</p>
+                <div className="flex gap-1">
+                  <button type="button" onClick={() => setRevealPhase(p => p === 'groups' ? 'groups' : p === 'r16' ? 'groups' : p === 'qf' ? 'r16' : p === 'sf' ? 'qf' : 'sf')}
+                    className="p-1.5 rounded-lg border border-collapse-border text-collapse-muted hover:text-collapse-text hover:border-collapse-accent transition-colors" title="Previous stage">
+                    <ChevronLeft className="w-3.5 h-3.5"/>
+                  </button>
+                  <button type="button" onClick={() => setRevealPhase(p => p === 'final' ? 'final' : p === 'groups' ? 'r16' : p === 'r16' ? 'qf' : p === 'qf' ? 'sf' : 'final')}
+                    className="p-1.5 rounded-lg border border-collapse-border text-collapse-muted hover:text-collapse-text hover:border-collapse-accent transition-colors" title="Next stage">
+                    <ChevronRight className="w-3.5 h-3.5"/>
+                  </button>
+                </div>
               </div>
+              <KnockoutStage label="Round of 16"  matches={tourn.knockout.r16}  visible={revealPhase !== 'groups'} onMatchClick={handleMatchClick}/>
+              <KnockoutStage label="Quarter-finals" matches={tourn.knockout.qf}  visible={revealPhase === 'qf' || revealPhase === 'sf' || revealPhase === 'final'} onMatchClick={handleMatchClick}/>
+              <KnockoutStage label="Semi-finals"  matches={tourn.knockout.sf}   visible={revealPhase === 'sf' || revealPhase === 'final'} onMatchClick={handleMatchClick}/>
+              <KnockoutStage label="3rd Place"    matches={tourn.knockout.third_place} visible={revealPhase === 'final'} onMatchClick={handleMatchClick}/>
+              {(revealPhase === 'final') && (
+                <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="border border-amber-500/30 bg-amber-500/5 rounded-xl p-2 space-y-1">
+                  <p className="text-[9px] font-black text-amber-400 uppercase tracking-widest">Final</p>
+                  {tourn.knockout.final.map((m, i) => <MatchRow key={i} m={m} onClick={() => handleMatchClick(m, 'Final')}/>)}
+                </motion.div>
+              )}
             </div>
           </div>
 
-          {/* Teams rounds reached */}
+          {/* Teams rounds reached — click team for performance */}
           <div className="bg-collapse-surface border border-collapse-border rounded-2xl p-5">
-            <p className="text-xs font-bold text-collapse-muted uppercase tracking-wider mb-3">All Teams · How Far They Got</p>
+            <p className="text-xs font-bold text-collapse-muted uppercase tracking-wider mb-3">All Teams · How Far They Got (click for details)</p>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
               {Object.entries(tourn.rounds_reached)
                 .sort((a, b) => {
@@ -376,12 +859,16 @@ function TournamentSim() {
                   return (order.indexOf(a[1]) ?? 8) - (order.indexOf(b[1]) ?? 8);
                 })
                 .map(([team, round]) => (
-                  <div key={team} className={`flex items-center justify-between gap-2 rounded-lg px-3 py-2 border text-xs ${
-                    round.includes('Champion') ? 'bg-amber-500/10 border-amber-500/25' :
-                    round.includes('Runner')   ? 'bg-slate-500/10 border-slate-500/20' :
-                    round.includes('3rd')      ? 'bg-orange-500/10 border-orange-500/20' :
-                    'bg-collapse-bg border-collapse-border'
-                  }`}>
+                  <div
+                    key={team}
+                    onClick={() => handleTeamClick(team)}
+                    className={`flex items-center justify-between gap-2 rounded-lg px-3 py-2 border text-xs cursor-pointer hover:ring-2 hover:ring-collapse-accent/40 transition-all ${
+                      round.includes('Champion') ? 'bg-amber-500/10 border-amber-500/25' :
+                      round.includes('Runner')   ? 'bg-slate-500/10 border-slate-500/20' :
+                      round.includes('3rd')      ? 'bg-orange-500/10 border-orange-500/20' :
+                      'bg-collapse-bg border-collapse-border'
+                    }`}
+                  >
                     <span className="font-semibold text-collapse-text truncate">{team}</span>
                     <span className={`text-[9px] shrink-0 ${
                       round.includes('Champion') ? 'text-amber-400' :
@@ -393,6 +880,25 @@ function TournamentSim() {
                 ))}
             </div>
           </div>
+
+          {/* Modals: match detail & team performance */}
+          <AnimatePresence>
+            {selectedMatch && (
+              <MatchDetailModal
+                match={selectedMatch}
+                stage={selectedMatchStage}
+                onClose={() => setSelectedMatch(null)}
+              />
+            )}
+            {selectedTeam && tourn && (
+              <TeamDetailModal
+                team={selectedTeam}
+                tourn={tourn}
+                onClose={() => setSelectedTeam(null)}
+                onMatchClick={(m, stage) => { setSelectedTeam(null); handleMatchClick(m, stage); }}
+              />
+            )}
+          </AnimatePresence>
         </div>
       )}
     </div>

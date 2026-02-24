@@ -175,6 +175,19 @@ export function About() {
             ))}
           </div>
         </div>
+
+        {/* Tournament simulation */}
+        <div className="bg-collapse-surface border border-collapse-border rounded-2xl p-5 space-y-3">
+          <div className="flex items-center gap-2">
+            <Globe className="w-4 h-4 text-amber-400"/>
+            <p className="text-xs font-bold text-amber-400 uppercase tracking-wider">WC 2026 Tournament Simulation</p>
+          </div>
+          <ul className="text-xs text-collapse-muted space-y-1.5 list-disc list-inside">
+            <li>Full bracket: 8 groups (matchdays 1–3), Round of 16, Quarter-finals, Semi-finals, 3rd place, Final</li>
+            <li>Click any match to see detailed stats (goals, result type, collapse risk); click any team to see how far they got and every match they played</li>
+            <li>Winner is always derived from the simulated score (and penalties when drawn), so the model’s prediction is consistent with the result</li>
+          </ul>
+        </div>
       </section>
 
       {/* Features */}
@@ -191,8 +204,8 @@ export function About() {
             description="Individual impact cards, pressure-split analysis, role coaching cues, match-stats radar, player traits, and full WC trajectory with next-match prediction."/>
           <FeatureCard delay={0.20} icon={Globe}         title="WC 2026 Map"           badge="Venues"
             description="Interactive Leaflet map of all 16 WC 2026 host venues. Click a venue to see fixture projections and team collapse risk comparisons per city."/>
-          <FeatureCard delay={0.25} icon={Radio}         title="Live Simulation"       badge="New"
-            description="Pick any two WC 2026 teams and watch a 90-minute simulated match play out in real time — collapse probability curves, sentiment bars, and live event feed."/>
+          <FeatureCard delay={0.25} icon={Radio}         title="Live Simulation"       badge="WC 2026"
+            description="Match Sim: pick two WC 2026 teams and run a 90-minute simulated match with collapse probability, sentiment, and live event feed. Tournament: run a full WC 2026 (8 groups, R16→Final) with matchdays, knockout bracket, and penalty shootouts. Click any match or team to see detailed stats and collapse risk; the winner is always derived from the simulated score so the model’s prediction is consistent."/>
           <FeatureCard delay={0.30} icon={TrendingUp}    title="Player Trajectory"     badge="Prediction"
             description="Per-match performance arcs pulled from real StatsBomb pass_nodes data. Resilience score, collapse contribution, and next-match performance forecast."/>
           <FeatureCard delay={0.35} icon={BarChart3}     title="Match Replay"         badge="War Room"
@@ -281,8 +294,9 @@ export function About() {
               fires early-warning triggers 10–20 minutes before a statistically significant probability shift, giving coaches actionable lead time.
             </p>
             <p>
-              <span className="text-collapse-text font-semibold">WC 2026 simulations</span> use WC 2018/2022 team fingerprints as priors. If a team has no historical WC record,
-              a deterministic synthetic fingerprint is derived from the team name seed. All simulation data is clearly labeled as synthetic.
+              <span className="text-collapse-text font-semibold">WC 2026 simulations</span> use WC 2018/2022 team fingerprints as priors (plus ELO and full 8-feature fingerprint for strength and collapse risk).
+              If a team has no historical WC record, a deterministic synthetic fingerprint is derived from the team name seed. All simulation data is clearly labeled as synthetic.
+              In the UI, the <span className="text-collapse-text font-semibold">winner is always derived from the simulated score</span> (and penalties when drawn in knockouts), so the model’s prediction is never inconsistent with the result.
             </p>
           </div>
         </div>
